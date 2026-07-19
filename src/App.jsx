@@ -1,0 +1,584 @@
+import { useState, useEffect } from "react";
+import {
+  Trophy, Users, Home, User, ChevronRight, ChevronLeft, X, Flame,
+  Wallet, Plus, Swords, Crosshair, Skull, CheckCircle2, Coins,
+  Megaphone, Share2, LogOut, Lock, Phone, Gamepad2, UserCircle2,
+} from "lucide-react";
+
+const C = {
+  bg: "#0B0B14",
+  surface: "#15131F",
+  surfaceAlt: "#1C1A29",
+  border: "#2A2738",
+  text: "#F4F2FB",
+  dim: "#9691AC",
+  violet: "#7C5CFC",
+  violetDim: "#3B3160",
+  red: "#FF4D5E",
+  teal: "#3DE1C6",
+  amber: "#FFB84D",
+  amberDim: "#3A2B10",
+};
+
+const now0 = Date.now();
+function mk(id, type, mode, title, entryFee, prize, joined, max, startOffsetMin) {
+  return { id, type, mode, title, entryFee, prize, joined, max, startsAt: now0 + startOffsetMin * 60000 };
+}
+const MATCHES = [
+  mk(1, "cs", "solo", "CS Solo Grind #21", 20, 150, 14, 16, 8),
+  mk(2, "cs", "solo", "CS Solo Late Night", 20, 150, 6, 16, 55),
+  mk(3, "cs", "duo", "CS Duo Clash #9", 30, 220, 10, 12, -3),
+  mk(4, "cs", "duo", "CS Duo Prime Time", 30, 220, 4, 12, 40),
+  mk(5, "cs", "squad", "CS Squad Showdown", 50, 400, 7, 8, 20),
+  mk(6, "cs", "squad", "CS Squad Weekly Final", 50, 400, 2, 8, 90),
+  mk(7, "br", "solo", "BR Solo Rush #33", 15, 120, 41, 48, 15),
+  mk(8, "br", "solo", "BR Solo Midnight", 15, 120, 22, 48, 70),
+  mk(9, "br", "duo", "BR Duo Rampage", 25, 200, 18, 24, -2),
+  mk(10, "br", "duo", "BR Duo Evening Cup", 25, 200, 9, 24, 33),
+  mk(11, "br", "squad", "BR Squad Booyah League", 40, 350, 15, 16, 5),
+  mk(12, "br", "squad", "BR Squad Grand Finale", 40, 350, 3, 16, 120),
+];
+const VALID_CODES = { "FF100XK92": 100, "FF250QW14": 250, "FF500ZP77": 500 };
+const LEADERBOARD = [
+  { name: "Shadow_Blaze", kills: 214, earned: 3200 },
+  { name: "RiverX", kills: 188, earned: 2750 },
+  { name: "NoScope_Dev", kills: 176, earned: 2600 },
+  { name: "Falcon.gg", kills: 150, earned: 2100 },
+  { name: "You", kills: 42, earned: 480 },
+];
+const ADS = [
+  "🔥 Weekend Squad Cup — 500 coin prize pool",
+  "Invite your squad — bonus coins for every friend who joins",
+  "New: BR Duo tournaments added every evening",
+];
+const RULES = [
+  "Entry fees are deducted the moment you join a match and are not refundable.",
+  "No emulators, hacks, or teaming outside your registered squad.",
+  "Submit a screenshot of your results if asked by an organizer.",
+  "Prize coins are credited within 24 hours of a match ending.",
+  "Repeated rule violations lead to a permanent account ban.",
+];
+
+function statusOf(m, now) {
+  if (now >= m.startsAt) return "live";
+  if (m.startsAt - now < 30 * 60000) return "soon";
+  return "open";
+}
+function countdown(ms) {
+  if (ms <= 0) return "LIVE";
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m ${sec}s`;
+}
+
+function readJSON(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+function writeJSON(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+function getAccounts() {
+  return readJSON("clutch_accounts") || {};
+}
+function saveAccounts(accounts) {
+  writeJSON("clutch_accounts", accounts);
+}
+
+function StatusPill({ st }) {
+  const map = {
+    live: { bg: "#3A1620", fg: C.red, label: "LIVE", pulse: true },
+    soon: { bg: C.amberDim, fg: C.amber, label: "STARTING SOON", pulse: false },
+    open: { bg: "#12332E", fg: C.teal, label: "OPEN", pulse: false },
+  };
+  const s = map[st];
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide" style={{ background: s.bg, color: s.fg }}>
+      {s.pulse && (
+        <span className="relative flex h-1.5 w-1.5">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: s.fg }} />
+          <span className="relative inline-flex rounded-full h-1.5 w-1.5" style={{ background: s.fg }} />
+        </span>
+      )}
+      {s.label}
+    </span>
+  );
+}
+function CoinBadge({ coins, onAdd }) {
+  return (
+    <button onClick={onAdd} className="flex items-center gap-1.5 rounded-full pl-1 pr-2.5 py-1" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+      <span className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: C.amberDim }}><Coins size={11} style={{ color: C.amber }} /></span>
+      <span className="text-xs font-bold" style={{ color: C.text }}>{coins}</span>
+      <Plus size={12} style={{ color: C.dim }} />
+    </button>
+  );
+}
+function BigCard({ icon: Icon, title, sub, color, onClick }) {
+  return (
+    <button onClick={onClick} className="w-full flex items-center gap-3.5 rounded-2xl p-4 mb-3 active:scale-[0.98] transition-transform" style={{ background: C.surface, borderLeft: `3px solid ${color}` }}>
+      <span className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${color}22` }}><Icon size={20} style={{ color }} /></span>
+      <span className="flex-1 text-left">
+        <div className="text-[15px] font-bold" style={{ color: C.text }}>{title}</div>
+        <div className="text-xs mt-0.5" style={{ color: C.dim }}>{sub}</div>
+      </span>
+      <ChevronRight size={18} style={{ color: C.dim }} />
+    </button>
+  );
+}
+function ModeCard({ icon: Icon, title, sub, onClick }) {
+  return (
+    <button onClick={onClick} className="w-full flex items-center gap-3.5 rounded-2xl p-4 mb-3 active:scale-[0.98] transition-transform" style={{ background: C.surface }}>
+      <span className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: C.violetDim }}><Icon size={20} style={{ color: C.violet }} /></span>
+      <span className="flex-1 text-left">
+        <div className="text-[15px] font-bold" style={{ color: C.text }}>{title}</div>
+        <div className="text-xs mt-0.5" style={{ color: C.dim }}>{sub}</div>
+      </span>
+      <ChevronRight size={18} style={{ color: C.dim }} />
+    </button>
+  );
+}
+function MatchCard({ m, now, onOpen, joined }) {
+  const st = statusOf(m, now);
+  const pct = Math.round((m.joined / m.max) * 100);
+  return (
+    <button onClick={() => onOpen(m)} className="w-full text-left rounded-2xl p-3.5 mb-3 flex flex-col gap-2.5" style={{ background: C.surface }}>
+      <div className="flex items-start justify-between">
+        <div className="text-[15px] font-bold leading-tight" style={{ color: C.text }}>{m.title}</div>
+        <ChevronRight size={18} style={{ color: C.dim, flexShrink: 0, marginTop: 2 }} />
+      </div>
+      <div className="flex items-center justify-between">
+        <StatusPill st={st} />
+        <span className="text-xs font-mono" style={{ color: C.dim }}>{st === "live" ? "in progress" : countdown(m.startsAt - now)}</span>
+      </div>
+      <div className="flex items-center gap-3 text-xs" style={{ color: C.dim }}>
+        <span className="flex items-center gap-1"><Coins size={12} style={{ color: C.amber }} /> {m.entryFee} entry</span>
+        <span className="flex items-center gap-1"><Trophy size={12} style={{ color: C.amber }} /> {m.prize} prize</span>
+        <span className="flex items-center gap-1"><Users size={12} /> {m.joined}/{m.max}</span>
+        {joined && <span className="ml-auto font-bold" style={{ color: C.violet }}>JOINED</span>}
+      </div>
+      <div className="h-1 rounded-full overflow-hidden" style={{ background: C.border }}>
+        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: C.violet }} />
+      </div>
+    </button>
+  );
+}
+function Header({ title, onBack, coins, onAdd }) {
+  return (
+    <div className="flex items-center justify-between px-4 pt-3 pb-2">
+      <div className="flex items-center gap-2">
+        {onBack && <button onClick={onBack} className="p-1.5 -ml-1.5 rounded-full" style={{ background: C.surface }}><ChevronLeft size={16} style={{ color: C.dim }} /></button>}
+        <span className="text-lg font-black tracking-tight" style={{ color: C.text }}>{title}</span>
+      </div>
+      <CoinBadge coins={coins} onAdd={onAdd} />
+    </div>
+  );
+}
+function Field({ icon: Icon, ...props }) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl px-3.5 py-3 mb-3" style={{ background: C.surfaceAlt, border: `1px solid ${C.border}` }}>
+      <Icon size={16} style={{ color: C.dim }} />
+      <input {...props} className="flex-1 bg-transparent outline-none text-sm" style={{ color: C.text }} />
+    </div>
+  );
+}
+
+function Splash() {
+  return (
+    <div className="absolute inset-0 z-40 flex flex-col items-center justify-center" style={{ background: C.bg }}>
+      <style>{`
+        @keyframes flamePulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.12); opacity: 0.85; } }
+        @keyframes riseIn { 0% { opacity: 0; transform: translateY(10px); } 100% { opacity: 1; transform: translateY(0); } }
+        @keyframes dotBlink { 0%,100% { opacity: 0.25; } 50% { opacity: 1; } }
+        .flame-anim { animation: flamePulse 1.1s ease-in-out infinite; }
+        .rise-anim { animation: riseIn 0.6s ease-out 0.15s both; }
+        .dot1 { animation: dotBlink 1.2s infinite 0s; }
+        .dot2 { animation: dotBlink 1.2s infinite 0.2s; }
+        .dot3 { animation: dotBlink 1.2s infinite 0.4s; }
+      `}</style>
+      <div className="flame-anim w-20 h-20 rounded-3xl flex items-center justify-center mb-4" style={{ background: C.violetDim }}>
+        <Flame size={40} style={{ color: C.red }} />
+      </div>
+      <div className="rise-anim text-2xl font-black tracking-tight" style={{ color: C.text }}>CLUTCH</div>
+      <div className="rise-anim text-xs mt-1 tracking-widest uppercase" style={{ color: C.dim }}>Free Fire Tournaments</div>
+      <div className="flex items-center gap-1 mt-6">
+        <span className="dot1 w-1.5 h-1.5 rounded-full" style={{ background: C.dim }} />
+        <span className="dot2 w-1.5 h-1.5 rounded-full" style={{ background: C.dim }} />
+        <span className="dot3 w-1.5 h-1.5 rounded-full" style={{ background: C.dim }} />
+      </div>
+    </div>
+  );
+}
+
+function AuthChoice({ onPick }) {
+  return (
+    <div className="absolute inset-0 z-40 flex flex-col justify-end p-6" style={{ background: C.bg }}>
+      <div className="flex-1 flex flex-col items-center justify-center">
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style={{ background: C.violetDim }}><Flame size={30} style={{ color: C.red }} /></div>
+        <div className="text-xl font-black" style={{ color: C.text }}>Welcome to Clutch</div>
+        <div className="text-sm mt-1 text-center" style={{ color: C.dim }}>Join Free Fire tournaments and earn by your skills.</div>
+      </div>
+      <button onClick={() => onPick("signup")} className="w-full rounded-xl py-3.5 font-bold text-sm mb-3" style={{ background: C.violet, color: "#fff" }}>Create account</button>
+      <button onClick={() => onPick("login")} className="w-full rounded-xl py-3.5 font-bold text-sm" style={{ background: C.surface, color: C.text, border: `1px solid ${C.border}` }}>Log in</button>
+    </div>
+  );
+}
+
+function SignUp({ onBack, onSubmit, busy, error }) {
+  const [phone, setPhone] = useState("");
+  const [gameName, setGameName] = useState("");
+  const [realName, setRealName] = useState("");
+  const [password, setPassword] = useState("");
+  return (
+    <div className="absolute inset-0 z-40 flex flex-col p-5" style={{ background: C.bg }}>
+      <button onClick={onBack} className="p-1.5 -ml-1.5 mb-3 rounded-full self-start" style={{ background: C.surface }}><ChevronLeft size={16} style={{ color: C.dim }} /></button>
+      <div className="text-xl font-black mb-1" style={{ color: C.text }}>Create your account</div>
+      <div className="text-xs mb-5" style={{ color: C.dim }}>You'll use your phone number and password to log in later.</div>
+      <Field icon={Phone} placeholder="Phone number" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="numeric" />
+      <Field icon={Gamepad2} placeholder="In-game name" value={gameName} onChange={(e) => setGameName(e.target.value)} />
+      <Field icon={UserCircle2} placeholder="Real name" value={realName} onChange={(e) => setRealName(e.target.value)} />
+      <Field icon={Lock} placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+      {error && <div className="text-xs font-semibold mb-2" style={{ color: C.red }}>{error}</div>}
+      <button
+        disabled={busy}
+        onClick={() => onSubmit({ phone: phone.trim(), gameName: gameName.trim(), realName: realName.trim(), password })}
+        className="w-full rounded-xl py-3.5 font-bold text-sm mt-2"
+        style={{ background: C.violet, color: "#fff", opacity: busy ? 0.6 : 1 }}
+      >
+        {busy ? "Creating account…" : "Sign up"}
+      </button>
+    </div>
+  );
+}
+
+function LogIn({ onBack, onSubmit, busy, error }) {
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+  return (
+    <div className="absolute inset-0 z-40 flex flex-col p-5" style={{ background: C.bg }}>
+      <button onClick={onBack} className="p-1.5 -ml-1.5 mb-3 rounded-full self-start" style={{ background: C.surface }}><ChevronLeft size={16} style={{ color: C.dim }} /></button>
+      <div className="text-xl font-black mb-1" style={{ color: C.text }}>Log in</div>
+      <div className="text-xs mb-5" style={{ color: C.dim }}>Use the phone number and password from sign up.</div>
+      <Field icon={Phone} placeholder="Phone number" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="numeric" />
+      <Field icon={Lock} placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+      {error && <div className="text-xs font-semibold mb-2" style={{ color: C.red }}>{error}</div>}
+      <button
+        disabled={busy}
+        onClick={() => onSubmit({ phone: phone.trim(), password })}
+        className="w-full rounded-xl py-3.5 font-bold text-sm mt-2"
+        style={{ background: C.violet, color: "#fff", opacity: busy ? 0.6 : 1 }}
+      >
+        {busy ? "Logging in…" : "Log in"}
+      </button>
+    </div>
+  );
+}
+
+export default function App() {
+  const [now, setNow] = useState(Date.now());
+  const [booted, setBooted] = useState(false);
+  const [session, setSession] = useState(null);
+  const [authMode, setAuthMode] = useState("choice");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState(null);
+
+  const [view, setView] = useState("home");
+  const [matchType, setMatchType] = useState("cs");
+  const [mode, setMode] = useState("solo");
+  const [coins, setCoins] = useState(120);
+  const [usedCodes, setUsedCodes] = useState([]);
+  const [joinedIds, setJoinedIds] = useState([2]);
+  const [activeMatch, setActiveMatch] = useState(null);
+  const [tab, setTab] = useState("home");
+  const [code, setCode] = useState("");
+  const [depositMsg, setDepositMsg] = useState(null);
+  const [successPopup, setSuccessPopup] = useState(null);
+  const [joinToast, setJoinToast] = useState(null);
+  const [showRules, setShowRules] = useState(false);
+  const [adIndex, setAdIndex] = useState(0);
+
+  useEffect(() => {
+    const existingSession = readJSON("clutch_session");
+    if (existingSession) setSession(existingSession);
+    const t = setTimeout(() => setBooted(true), 1600);
+    return () => clearTimeout(t);
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    const id = setInterval(() => setAdIndex((i) => (i + 1) % ADS.length), 4000);
+    return () => clearInterval(id);
+  }, []);
+
+  const filteredMatches = MATCHES.filter((m) => m.type === matchType && m.mode === mode);
+
+  function handleSignUp({ phone, gameName, realName, password }) {
+    setAuthError(null);
+    if (!phone || !gameName || !realName || !password) { setAuthError("Please fill in every field."); return; }
+    if (password.length < 4) { setAuthError("Password should be at least 4 characters."); return; }
+    setAuthBusy(true);
+    const accounts = getAccounts();
+    if (accounts[phone]) { setAuthError("An account with this phone number already exists — try logging in."); setAuthBusy(false); return; }
+    const profile = { phone, gameName, realName };
+    accounts[phone] = { ...profile, password };
+    saveAccounts(accounts);
+    writeJSON("clutch_session", profile);
+    setSession(profile);
+    setAuthBusy(false);
+  }
+
+  function handleLogIn({ phone, password }) {
+    setAuthError(null);
+    if (!phone || !password) { setAuthError("Enter your phone number and password."); return; }
+    setAuthBusy(true);
+    const accounts = getAccounts();
+    const acc = accounts[phone];
+    if (!acc || acc.password !== password) { setAuthError("Phone number or password is incorrect."); setAuthBusy(false); return; }
+    const profile = { phone: acc.phone, gameName: acc.gameName, realName: acc.realName };
+    writeJSON("clutch_session", profile);
+    setSession(profile);
+    setAuthBusy(false);
+  }
+
+  function handleLogout() {
+    localStorage.removeItem("clutch_session");
+    setSession(null);
+    setAuthMode("choice");
+    setTab("home"); setView("home"); setActiveMatch(null);
+  }
+
+  function shareApp() {
+    if (navigator.share) {
+      navigator.share({ title: "Clutch", text: "Join me on Clutch — Free Fire tournaments!", url: window.location.href }).catch(() => {});
+    } else {
+      setJoinToast("Share link copied — send it to your squad!");
+    }
+  }
+
+  function submitCode() {
+    const clean = code.trim().toUpperCase();
+    if (!clean) return;
+    if (usedCodes.includes(clean)) { setDepositMsg({ text: "This payment ID has already been used." }); return; }
+    const amount = VALID_CODES[clean];
+    if (!amount) { setDepositMsg({ text: "Invalid payment ID. Double-check and try again." }); return; }
+    setCoins((c) => c + amount);
+    setUsedCodes((u) => [...u, clean]);
+    setCode(""); setDepositMsg(null); setSuccessPopup(amount);
+  }
+
+  function joinMatch(m) {
+    if (joinedIds.includes(m.id)) return;
+    if (coins < m.entryFee) { setJoinToast("Not enough coins — deposit to join this match."); return; }
+    setCoins((c) => c - m.entryFee);
+    setJoinedIds((j) => [...j, m.id]);
+    setActiveMatch(null);
+    setJoinToast(`Joined ${m.title}!`);
+  }
+
+  useEffect(() => {
+    if (!joinToast) return;
+    const t = setTimeout(() => setJoinToast(null), 2200);
+    return () => clearTimeout(t);
+  }, [joinToast]);
+
+  const matchesPlayed = joinedIds.length + 6, totalKills = 42, totalEarned = 480;
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "#050408" }}>
+      <div className="relative w-full overflow-hidden flex flex-col" style={{ maxWidth: 390, height: 780, background: C.bg, borderRadius: 32, border: `1px solid ${C.border}`, boxShadow: "0 30px 80px rgba(0,0,0,0.6)" }}>
+
+        {!booted && <Splash />}
+
+        {booted && !session && authMode === "choice" && <AuthChoice onPick={(m) => { setAuthError(null); setAuthMode(m); }} />}
+        {booted && !session && authMode === "signup" && <SignUp onBack={() => setAuthMode("choice")} onSubmit={handleSignUp} busy={authBusy} error={authError} />}
+        {booted && !session && authMode === "login" && <LogIn onBack={() => setAuthMode("choice")} onSubmit={handleLogIn} busy={authBusy} error={authError} />}
+
+        {booted && session && (
+          <>
+            <div className="flex items-center gap-1.5 px-4 pt-4">
+              <Flame size={18} style={{ color: C.red }} />
+              <span className="text-base font-black tracking-tight" style={{ color: C.text }}>CLUTCH</span>
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ background: C.surfaceAlt, color: C.dim }}>FREE FIRE</span>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 pb-2 relative mt-1">
+              {tab === "home" && view === "home" && (
+                <>
+                  <Header title="Home" coins={coins} onAdd={() => { setTab("home"); setView("deposit"); }} />
+                  <BigCard icon={Wallet} title="Deposit" sub="Add coins using a payment ID" color={C.amber} onClick={() => setView("deposit")} />
+                  <BigCard icon={Swords} title="CS Matches" sub="Clash Squad · Solo, Duo, Squad" color={C.violet} onClick={() => { setMatchType("cs"); setView("modes"); }} />
+                  <BigCard icon={Crosshair} title="BR Matches" sub="Battle Royale · Solo, Duo, Squad" color={C.teal} onClick={() => { setMatchType("br"); setView("modes"); }} />
+                  <button onClick={() => setShowRules(true)} className="w-full text-left rounded-2xl p-3.5 mt-1" style={{ background: `linear-gradient(135deg, ${C.violetDim}, ${C.surface})`, border: `1px solid ${C.border}` }}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <Megaphone size={14} style={{ color: C.amber }} />
+                      <span className="text-[10px] font-bold tracking-wide uppercase" style={{ color: C.amber }}>Announcement</span>
+                    </div>
+                    <div className="text-sm font-semibold" style={{ color: C.text }}>{ADS[adIndex]}</div>
+                    <div className="text-xs mt-1.5 underline" style={{ color: C.dim }}>View tournament rules</div>
+                  </button>
+                </>
+              )}
+
+              {tab === "home" && view === "deposit" && (
+                <>
+                  <Header title="Deposit" onBack={() => setView("home")} coins={coins} onAdd={() => {}} />
+                  <div className="rounded-2xl p-4 mt-1" style={{ background: C.surface }}>
+                    <div className="text-sm mb-3" style={{ color: C.dim }}>Send payment to get your payment ID on WhatsApp, then paste it below to receive your coins instantly.</div>
+                    <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Paste payment ID" className="w-full rounded-xl px-3.5 py-3 text-sm font-mono outline-none mb-3" style={{ background: C.surfaceAlt, color: C.text, border: `1px solid ${C.border}` }} />
+                    <button onClick={submitCode} className="w-full rounded-xl py-3 font-bold text-sm" style={{ background: C.violet, color: "#fff" }}>Redeem coins</button>
+                    {depositMsg && <div className="text-xs mt-3 font-semibold" style={{ color: C.red }}>{depositMsg.text}</div>}
+                  </div>
+                </>
+              )}
+
+              {tab === "home" && view === "modes" && (
+                <>
+                  <Header title={matchType === "cs" ? "CS Matches" : "BR Matches"} onBack={() => setView("home")} coins={coins} onAdd={() => { setTab("home"); setView("deposit"); }} />
+                  <ModeCard icon={User} title="Solo" sub="1 player per team" onClick={() => { setMode("solo"); setView("matches"); }} />
+                  <ModeCard icon={Users} title="Duo" sub="2 players per team" onClick={() => { setMode("duo"); setView("matches"); }} />
+                  <ModeCard icon={Users} title="Squad" sub="4 players per team" onClick={() => { setMode("squad"); setView("matches"); }} />
+                </>
+              )}
+
+              {tab === "home" && view === "matches" && (
+                <>
+                  <Header title={`${matchType === "cs" ? "CS" : "BR"} · ${mode[0].toUpperCase() + mode.slice(1)}`} onBack={() => setView("modes")} coins={coins} onAdd={() => { setTab("home"); setView("deposit"); }} />
+                  {filteredMatches.map((m) => <MatchCard key={m.id} m={m} now={now} onOpen={setActiveMatch} joined={joinedIds.includes(m.id)} />)}
+                </>
+              )}
+
+              {tab === "leaderboard" && (
+                <>
+                  <Header title="Leaderboard" coins={coins} onAdd={() => { setTab("home"); setView("deposit"); }} />
+                  <div className="rounded-2xl overflow-hidden" style={{ background: C.surface }}>
+                    {LEADERBOARD.map((p, i) => (
+                      <div key={p.name} className="flex items-center gap-3 px-3.5 py-3" style={{ borderBottom: i < LEADERBOARD.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                        <span className="w-6 text-sm font-bold text-center" style={{ color: i < 3 ? C.amber : C.dim }}>{i + 1}</span>
+                        <span className="flex-1 text-sm font-semibold" style={{ color: p.name === "You" ? C.violet : C.text }}>{p.name}</span>
+                        <span className="flex items-center gap-1 text-xs" style={{ color: C.dim }}><Skull size={12} /> {p.kills}</span>
+                        <span className="flex items-center gap-1 text-xs font-semibold" style={{ color: C.amber }}><Coins size={12} /> {p.earned}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {tab === "account" && (
+                <>
+                  <Header title="Account" coins={coins} onAdd={() => { setTab("home"); setView("deposit"); }} />
+                  <div className="flex flex-col items-center text-center pt-3 pb-5">
+                    <div className="w-16 h-16 rounded-full flex items-center justify-center mb-3" style={{ background: C.violetDim }}><User size={26} style={{ color: C.violet }} /></div>
+                    <div className="font-bold" style={{ color: C.text }}>{session.gameName}</div>
+                    <div className="text-xs mt-1" style={{ color: C.dim }}>{session.realName}</div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 mb-4">
+                    <div className="rounded-xl p-3 text-center" style={{ background: C.surface }}>
+                      <div className="text-lg font-bold" style={{ color: C.text }}>{matchesPlayed}</div>
+                      <div className="text-[10px] uppercase tracking-wide mt-0.5" style={{ color: C.dim }}>Matches</div>
+                    </div>
+                    <div className="rounded-xl p-3 text-center" style={{ background: C.surface }}>
+                      <div className="text-lg font-bold" style={{ color: C.text }}>{totalKills}</div>
+                      <div className="text-[10px] uppercase tracking-wide mt-0.5" style={{ color: C.dim }}>Kills</div>
+                    </div>
+                    <div className="rounded-xl p-3 text-center" style={{ background: C.surface }}>
+                      <div className="text-lg font-bold" style={{ color: C.amber }}>{totalEarned}</div>
+                      <div className="text-[10px] uppercase tracking-wide mt-0.5" style={{ color: C.dim }}>Earned</div>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl overflow-hidden" style={{ background: C.surface }}>
+                    <button onClick={shareApp} className="w-full flex items-center gap-3 px-3.5 py-3.5" style={{ borderBottom: `1px solid ${C.border}` }}>
+                      <Share2 size={16} style={{ color: C.dim }} />
+                      <span className="flex-1 text-left text-sm font-semibold" style={{ color: C.text }}>Share the app</span>
+                      <ChevronRight size={16} style={{ color: C.dim }} />
+                    </button>
+                    <button onClick={handleLogout} className="w-full flex items-center gap-3 px-3.5 py-3.5">
+                      <LogOut size={16} style={{ color: C.red }} />
+                      <span className="flex-1 text-left text-sm font-semibold" style={{ color: C.red }}>Log out</span>
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {activeMatch && (
+                <div className="absolute inset-0 z-20 flex flex-col" style={{ background: C.bg }}>
+                  <div className="flex items-center justify-between px-0 pt-1 pb-2">
+                    <span className="text-xs font-semibold tracking-wider uppercase" style={{ color: C.violet }}>{activeMatch.type === "cs" ? "Clash Squad" : "Battle Royale"} · {activeMatch.mode}</span>
+                    <button onClick={() => setActiveMatch(null)} className="p-1.5 rounded-full" style={{ background: C.surface }}><X size={16} style={{ color: C.dim }} /></button>
+                  </div>
+                  <h2 className="text-2xl font-black leading-tight mb-2" style={{ color: C.text }}>{activeMatch.title}</h2>
+                  <div className="mb-4"><StatusPill st={statusOf(activeMatch, now)} /></div>
+                  <div className="grid grid-cols-2 gap-2 mb-5">
+                    <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Entry fee</div><div className="text-lg font-bold" style={{ color: C.amber }}>{activeMatch.entryFee} coins</div></div>
+                    <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Prize pool</div><div className="text-lg font-bold" style={{ color: C.amber }}>{activeMatch.prize} coins</div></div>
+                    <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Players</div><div className="text-sm font-semibold mt-0.5" style={{ color: C.text }}>{activeMatch.joined}/{activeMatch.max}</div></div>
+                    <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Starts</div><div className="text-sm font-semibold mt-0.5" style={{ color: C.text }}>{statusOf(activeMatch, now) === "live" ? "Now" : countdown(activeMatch.startsAt - now)}</div></div>
+                  </div>
+                  <div className="text-xs mb-3" style={{ color: C.dim }}>Entry fee is deducted immediately once you join and cannot be refunded.</div>
+                  <div className="mt-auto pb-2">
+                    <button
+                      onClick={() => joinMatch(activeMatch)}
+                      disabled={joinedIds.includes(activeMatch.id)}
+                      className="w-full rounded-xl py-3.5 font-bold text-sm"
+                      style={joinedIds.includes(activeMatch.id) ? { background: C.surfaceAlt, color: C.dim, border: `1px solid ${C.border}` } : { background: C.violet, color: "#fff" }}
+                    >
+                      {joinedIds.includes(activeMatch.id) ? "Already joined" : `Join with ${activeMatch.entryFee} coins`}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {showRules && (
+                <div className="absolute inset-0 z-30 flex items-end" style={{ background: "rgba(5,4,8,0.75)" }}>
+                  <div className="w-full rounded-t-3xl p-5" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-lg font-black" style={{ color: C.text }}>Tournament rules</span>
+                      <button onClick={() => setShowRules(false)} className="p-1.5 rounded-full" style={{ background: C.surfaceAlt }}><X size={15} style={{ color: C.dim }} /></button>
+                    </div>
+                    <ul className="space-y-2.5 mb-4">
+                      {RULES.map((r, i) => <li key={i} className="text-sm flex gap-2" style={{ color: C.dim }}><span style={{ color: C.violet }}>•</span>{r}</li>)}
+                    </ul>
+                    <button onClick={() => setShowRules(false)} className="w-full rounded-xl py-3 font-bold text-sm" style={{ background: C.violet, color: "#fff" }}>Got it</button>
+                  </div>
+                </div>
+              )}
+
+              {successPopup !== null && (
+                <div className="absolute inset-0 z-30 flex items-center justify-center" style={{ background: "rgba(5,4,8,0.75)" }}>
+                  <div className="rounded-2xl p-6 flex flex-col items-center text-center mx-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+                    <CheckCircle2 size={40} style={{ color: C.teal }} />
+                    <div className="text-lg font-bold mt-3" style={{ color: C.text }}>Coins are given to you!</div>
+                    <div className="text-sm mt-1" style={{ color: C.dim }}>+{successPopup} coins added to your balance</div>
+                    <button onClick={() => setSuccessPopup(null)} className="mt-4 px-6 py-2 rounded-full text-sm font-bold" style={{ background: C.violet, color: "#fff" }}>Nice</button>
+                  </div>
+                </div>
+              )}
+
+              {joinToast && (
+                <div className="absolute left-0 right-0 bottom-2 z-30 flex justify-center px-4">
+                  <div className="px-4 py-2.5 rounded-full text-xs font-semibold text-center" style={{ background: C.surfaceAlt, color: C.text, border: `1px solid ${C.border}` }}>{joinToast}</div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-around py-3" style={{ borderTop: `1px solid ${C.border}`, background: C.bg }}>
+              {[{ id: "home", label: "Home", icon: Home }, { id: "leaderboard", label: "Leaderboard", icon: Trophy }, { id: "account", label: "Account", icon: User }].map(({ id, label, icon: Icon }) => (
+                <button key={id} onClick={() => { setTab(id); if (id === "home") setView("home"); }} className="flex flex-col items-center gap-1">
+                  <Icon size={18} style={{ color: tab === id ? C.violet : C.dim }} />
+                  <span className="text-[10px] font-semibold" style={{ color: tab === id ? C.violet : C.dim }}>{label}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+                     }
