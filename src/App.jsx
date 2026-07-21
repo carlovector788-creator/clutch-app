@@ -3,6 +3,8 @@ import {
   Trophy, Users, Home, User, ChevronRight, ChevronLeft, X, Flame,
   Wallet, Plus, Swords, Crosshair, Skull, CheckCircle2, Coins,
   Megaphone, Share2, LogOut, Lock, Phone, Gamepad2, UserCircle2,
+  MessageCircle, ArrowDownToLine, ArrowUpFromLine, Pencil,
+  DoorOpen, CalendarClock,
 } from "lucide-react";
 
 const C = {
@@ -19,6 +21,9 @@ const C = {
   amber: "#FFB84D",
   amberDim: "#3A2B10",
 };
+
+const WHATSAPP_LINK = "https://wa.me/923422178917";
+const MIN_DEPOSIT = 100;
 
 const now0 = Date.now();
 function mk(id, type, mode, title, entryFee, prize, joined, max, startOffsetMin) {
@@ -46,12 +51,12 @@ const LEADERBOARD = [
   { name: "Falcon.gg", kills: 150, earned: 2100 },
   { name: "You", kills: 42, earned: 480 },
 ];
-const ADS = [
+const DEFAULT_ADS = [
   "🔥 Weekend Squad Cup — 500 coin prize pool",
   "Invite your squad — bonus coins for every friend who joins",
   "New: BR Duo tournaments added every evening",
 ];
-const RULES = [
+const DEFAULT_RULES = [
   "Entry fees are deducted the moment you join a match and are not refundable.",
   "No emulators, hacks, or teaming outside your registered squad.",
   "Submit a screenshot of your results if asked by an organizer.",
@@ -72,24 +77,23 @@ function countdown(ms) {
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m ${sec}s`;
 }
-
-function readJSON(key) {
+function readJSON(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
+    return raw ? JSON.parse(raw) : fallback;
   } catch (e) {
-    return null;
+    return fallback;
   }
 }
 function writeJSON(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
-function getAccounts() {
-  return readJSON("clutch_accounts") || {};
-}
-function saveAccounts(accounts) {
-  writeJSON("clutch_accounts", accounts);
-}
+function getAccounts() { return readJSON("clutch_accounts", {}); }
+function saveAccounts(a) { writeJSON("clutch_accounts", a); }
+function getMatchData() { return readJSON("clutch_matchdata", { joinedPlayers: {}, roomDetails: {} }); }
+function saveMatchData(d) { writeJSON("clutch_matchdata", d); }
+function getAdminContent() { return readJSON("clutch_admincontent", { ads: DEFAULT_ADS, rules: DEFAULT_RULES }); }
+function saveAdminContent(c) { writeJSON("clutch_admincontent", c); }
 
 function StatusPill({ st }) {
   const map = {
@@ -182,9 +186,18 @@ function Header({ title, onBack, coins, onAdd }) {
 function Field({ icon: Icon, ...props }) {
   return (
     <div className="flex items-center gap-2.5 rounded-xl px-3.5 py-3 mb-3" style={{ background: C.surfaceAlt, border: `1px solid ${C.border}` }}>
-      <Icon size={16} style={{ color: C.dim }} />
+      {Icon && <Icon size={16} style={{ color: C.dim }} />}
       <input {...props} className="flex-1 bg-transparent outline-none text-sm" style={{ color: C.text }} />
     </div>
+  );
+}
+function AccountRow({ icon: Icon, label, color, onClick, danger }) {
+  return (
+    <button onClick={onClick} className="w-full flex items-center gap-3 px-3.5 py-3.5" style={{ borderBottom: `1px solid ${C.border}` }}>
+      <Icon size={16} style={{ color: danger ? C.red : (color || C.dim) }} />
+      <span className="flex-1 text-left text-sm font-semibold" style={{ color: danger ? C.red : C.text }}>{label}</span>
+      <ChevronRight size={16} style={{ color: C.dim }} />
+    </button>
   );
 }
 
@@ -287,24 +300,64 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState(null);
 
-  const [view, setView] = useState("home");
+  const [view, setView] = useState("home"); // home | modes | matches | upcoming
   const [matchType, setMatchType] = useState("cs");
   const [mode, setMode] = useState("solo");
-  const [coins, setCoins] = useState(120);
+  const [coins, setCoins] = useState(0);
+  const [depositHistory, setDepositHistory] = useState([]);
+  const [withdrawHistory, setWithdrawHistory] = useState([]);
   const [usedCodes, setUsedCodes] = useState([]);
-  const [joinedIds, setJoinedIds] = useState([2]);
+  const [joinedIds, setJoinedIds] = useState([]);
+  const [joinedPlayers, setJoinedPlayers] = useState({});
+  const [roomDetails, setRoomDetails] = useState({});
+  const [adminContent, setAdminContent] = useState({ ads: DEFAULT_ADS, rules: DEFAULT_RULES });
+
   const [activeMatch, setActiveMatch] = useState(null);
+  const [joinFormMatch, setJoinFormMatch] = useState(null);
+  const [joinGameName, setJoinGameName] = useState("");
+  const [joinUid, setJoinUid] = useState("");
+  const [joinError, setJoinError] = useState(null);
+  const [viewPlayersMatch, setViewPlayersMatch] = useState(null);
+  const [viewRoomMatch, setViewRoomMatch] = useState(null);
+
   const [tab, setTab] = useState("home");
+  const [acctView, setAcctView] = useState(null); // null | editProfile | wallet | deposit | withdraw
   const [code, setCode] = useState("");
   const [depositMsg, setDepositMsg] = useState(null);
+  const [showMinDepositPopup, setShowMinDepositPopup] = useState(false);
   const [successPopup, setSuccessPopup] = useState(null);
   const [joinToast, setJoinToast] = useState(null);
   const [showRules, setShowRules] = useState(false);
   const [adIndex, setAdIndex] = useState(0);
 
+  const [editName, setEditName] = useState("");
+  const [editPass, setEditPass] = useState("");
+  const [editPassConfirm, setEditPassConfirm] = useState("");
+  const [editMsg, setEditMsg] = useState(null);
+
+  const [withdrawMethod, setWithdrawMethod] = useState("easypaisa");
+  const [wAccountId, setWAccountId] = useState("");
+  const [wAccountHolder, setWAccountHolder] = useState("");
+  const [wCoins, setWCoins] = useState("");
+  const [withdrawMsg, setWithdrawMsg] = useState(null);
+
   useEffect(() => {
-    const existingSession = readJSON("clutch_session");
-    if (existingSession) setSession(existingSession);
+    const existingSession = readJSON("clutch_session", null);
+    if (existingSession) {
+      setSession(existingSession);
+      const accounts = getAccounts();
+      const acc = accounts[existingSession.phone];
+      if (acc) {
+        setCoins(acc.coins ?? 0);
+        setDepositHistory(acc.depositHistory || []);
+        setWithdrawHistory(acc.withdrawHistory || []);
+      }
+    }
+    const md = getMatchData();
+    setJoinedPlayers(md.joinedPlayers || {});
+    setRoomDetails(md.roomDetails || {});
+    const ac = getAdminContent();
+    setAdminContent(ac);
     const t = setTimeout(() => setBooted(true), 1600);
     return () => clearTimeout(t);
   }, []);
@@ -314,11 +367,20 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
   useEffect(() => {
-    const id = setInterval(() => setAdIndex((i) => (i + 1) % ADS.length), 4000);
+    const id = setInterval(() => setAdIndex((i) => (i + 1) % (adminContent.ads.length || 1)), 4000);
     return () => clearInterval(id);
-  }, []);
+  }, [adminContent.ads.length]);
 
   const filteredMatches = MATCHES.filter((m) => m.type === matchType && m.mode === mode);
+  const myJoinedIds = joinedIds;
+  const upcomingJoinedMatches = MATCHES.filter((m) => myJoinedIds.includes(m.id));
+
+  function persistAccountFields(phone, fields) {
+    const accounts = getAccounts();
+    if (!accounts[phone]) return;
+    accounts[phone] = { ...accounts[phone], ...fields };
+    saveAccounts(accounts);
+  }
 
   function handleSignUp({ phone, gameName, realName, password }) {
     setAuthError(null);
@@ -328,10 +390,13 @@ export default function App() {
     const accounts = getAccounts();
     if (accounts[phone]) { setAuthError("An account with this phone number already exists — try logging in."); setAuthBusy(false); return; }
     const profile = { phone, gameName, realName };
-    accounts[phone] = { ...profile, password };
+    accounts[phone] = { ...profile, password, coins: 0, depositHistory: [], withdrawHistory: [] };
     saveAccounts(accounts);
     writeJSON("clutch_session", profile);
     setSession(profile);
+    setCoins(0);
+    setDepositHistory([]);
+    setWithdrawHistory([]);
     setAuthBusy(false);
   }
 
@@ -345,6 +410,9 @@ export default function App() {
     const profile = { phone: acc.phone, gameName: acc.gameName, realName: acc.realName };
     writeJSON("clutch_session", profile);
     setSession(profile);
+    setCoins(acc.coins ?? 0);
+    setDepositHistory(acc.depositHistory || []);
+    setWithdrawHistory(acc.withdrawHistory || []);
     setAuthBusy(false);
   }
 
@@ -352,7 +420,7 @@ export default function App() {
     localStorage.removeItem("clutch_session");
     setSession(null);
     setAuthMode("choice");
-    setTab("home"); setView("home"); setActiveMatch(null);
+    setTab("home"); setView("home"); setActiveMatch(null); setAcctView(null);
   }
 
   function shareApp() {
@@ -369,23 +437,81 @@ export default function App() {
     if (usedCodes.includes(clean)) { setDepositMsg({ text: "This payment ID has already been used." }); return; }
     const amount = VALID_CODES[clean];
     if (!amount) { setDepositMsg({ text: "Invalid payment ID. Double-check and try again." }); return; }
-    setCoins((c) => c + amount);
+    if (amount < MIN_DEPOSIT) { setShowMinDepositPopup(true); return; }
+    const newCoins = coins + amount;
+    const entry = { amount, code: clean, date: new Date().toISOString() };
+    const newHistory = [entry, ...depositHistory];
+    setCoins(newCoins);
+    setDepositHistory(newHistory);
     setUsedCodes((u) => [...u, clean]);
+    persistAccountFields(session.phone, { coins: newCoins, depositHistory: newHistory });
     setCode(""); setDepositMsg(null); setSuccessPopup(amount);
   }
 
-  function joinMatch(m) {
-    if (joinedIds.includes(m.id)) return;
-    if (coins < m.entryFee) { setJoinToast("Not enough coins — deposit to join this match."); return; }
-    setCoins((c) => c - m.entryFee);
+  function submitWithdraw() {
+    setWithdrawMsg(null);
+    const amt = parseInt(wCoins, 10);
+    if (!wAccountId.trim() || !wAccountHolder.trim() || !amt) { setWithdrawMsg("Please fill in every field."); return; }
+    if (amt > coins) { setWithdrawMsg("You don't have enough coins for this withdrawal."); return; }
+    const newCoins = coins - amt;
+    const entry = { method: withdrawMethod, amount: amt, accountId: wAccountId.trim(), accountHolder: wAccountHolder.trim(), date: new Date().toISOString(), status: "Pending" };
+    const newHistory = [entry, ...withdrawHistory];
+    setCoins(newCoins);
+    setWithdrawHistory(newHistory);
+    persistAccountFields(session.phone, { coins: newCoins, withdrawHistory: newHistory });
+    setWAccountId(""); setWAccountHolder(""); setWCoins("");
+    setJoinToast("Withdrawal request sent — the admin will process it shortly.");
+    setAcctView(null);
+  }
+
+  function openJoinForm(m) {
+    setJoinFormMatch(m);
+    setJoinGameName("");
+    setJoinUid("");
+    setJoinError(null);
+  }
+
+  function confirmJoin() {
+    const m = joinFormMatch;
+    if (!joinGameName.trim() || !joinUid.trim()) { setJoinError("Both game name and UID are required to join."); return; }
+    if (joinedIds.includes(m.id)) { setJoinFormMatch(null); return; }
+    if (coins < m.entryFee) { setJoinError("Not enough coins — deposit to join this match."); return; }
+    const newCoins = coins - m.entryFee;
+    setCoins(newCoins);
+    persistAccountFields(session.phone, { coins: newCoins });
     setJoinedIds((j) => [...j, m.id]);
+    const md = getMatchData();
+    const list = md.joinedPlayers[m.id] || [];
+    const updated = { ...md.joinedPlayers, [m.id]: [...list, { gameName: joinGameName.trim(), uid: joinUid.trim() }] };
+    const newMd = { ...md, joinedPlayers: updated };
+    saveMatchData(newMd);
+    setJoinedPlayers(updated);
+    setJoinFormMatch(null);
     setActiveMatch(null);
     setJoinToast(`Joined ${m.title}!`);
   }
 
+  function submitProfileEdit() {
+    setEditMsg(null);
+    if (editPass || editPassConfirm) {
+      if (editPass.length < 4) { setEditMsg("New password should be at least 4 characters."); return; }
+      if (editPass !== editPassConfirm) { setEditMsg("Passwords do not match."); return; }
+    }
+    const newGameName = editName.trim() || session.gameName;
+    const updatedSession = { ...session, gameName: newGameName };
+    writeJSON("clutch_session", updatedSession);
+    setSession(updatedSession);
+    const fields = { gameName: newGameName };
+    if (editPass) fields.password = editPass;
+    persistAccountFields(session.phone, fields);
+    setEditPass(""); setEditPassConfirm("");
+    setJoinToast("Profile updated.");
+    setAcctView(null);
+  }
+
   useEffect(() => {
     if (!joinToast) return;
-    const t = setTimeout(() => setJoinToast(null), 2200);
+    const t = setTimeout(() => setJoinToast(null), 2400);
     return () => clearTimeout(t);
   }, [joinToast]);
 
@@ -410,38 +536,32 @@ export default function App() {
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 pb-2 relative mt-1">
+
+              {/* ---------------- HOME TAB ---------------- */}
               {tab === "home" && view === "home" && (
                 <>
-                  <Header title="Home" coins={coins} onAdd={() => { setTab("home"); setView("deposit"); }} />
-                  <BigCard icon={Wallet} title="Deposit" sub="Add coins using a payment ID" color={C.amber} onClick={() => setView("deposit")} />
+                  <Header title="Home" coins={coins} onAdd={() => { setTab("account"); setAcctView("deposit"); }} />
                   <BigCard icon={Swords} title="CS Matches" sub="Clash Squad · Solo, Duo, Squad" color={C.violet} onClick={() => { setMatchType("cs"); setView("modes"); }} />
                   <BigCard icon={Crosshair} title="BR Matches" sub="Battle Royale · Solo, Duo, Squad" color={C.teal} onClick={() => { setMatchType("br"); setView("modes"); }} />
-                  <button onClick={() => setShowRules(true)} className="w-full text-left rounded-2xl p-3.5 mt-1" style={{ background: `linear-gradient(135deg, ${C.violetDim}, ${C.surface})`, border: `1px solid ${C.border}` }}>
+                  <button onClick={() => setShowRules(true)} className="w-full text-left rounded-2xl p-3.5 mt-1 mb-3" style={{ background: `linear-gradient(135deg, ${C.violetDim}, ${C.surface})`, border: `1px solid ${C.border}` }}>
                     <div className="flex items-center gap-2 mb-1">
                       <Megaphone size={14} style={{ color: C.amber }} />
                       <span className="text-[10px] font-bold tracking-wide uppercase" style={{ color: C.amber }}>Announcement</span>
                     </div>
-                    <div className="text-sm font-semibold" style={{ color: C.text }}>{ADS[adIndex]}</div>
+                    <div className="text-sm font-semibold" style={{ color: C.text }}>{adminContent.ads[adIndex % adminContent.ads.length]}</div>
                     <div className="text-xs mt-1.5 underline" style={{ color: C.dim }}>View tournament rules</div>
                   </button>
-                </>
-              )}
-
-              {tab === "home" && view === "deposit" && (
-                <>
-                  <Header title="Deposit" onBack={() => setView("home")} coins={coins} onAdd={() => {}} />
-                  <div className="rounded-2xl p-4 mt-1" style={{ background: C.surface }}>
-                    <div className="text-sm mb-3" style={{ color: C.dim }}>Send payment to get your payment ID on WhatsApp, then paste it below to receive your coins instantly.</div>
-                    <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Paste payment ID" className="w-full rounded-xl px-3.5 py-3 text-sm font-mono outline-none mb-3" style={{ background: C.surfaceAlt, color: C.text, border: `1px solid ${C.border}` }} />
-                    <button onClick={submitCode} className="w-full rounded-xl py-3 font-bold text-sm" style={{ background: C.violet, color: "#fff" }}>Redeem coins</button>
-                    {depositMsg && <div className="text-xs mt-3 font-semibold" style={{ color: C.red }}>{depositMsg.text}</div>}
-                  </div>
+                  <button onClick={() => setView("upcoming")} className="w-full rounded-2xl p-4 flex items-center gap-3" style={{ background: `linear-gradient(135deg, ${C.amberDim}, ${C.surface})`, border: `1px solid ${C.border}` }}>
+                    <CalendarClock size={20} style={{ color: C.amber }} />
+                    <span className="italic font-black text-base tracking-wide" style={{ color: C.amber, letterSpacing: "0.03em" }}>Upcoming Matches</span>
+                    <ChevronRight size={18} style={{ color: C.dim, marginLeft: "auto" }} />
+                  </button>
                 </>
               )}
 
               {tab === "home" && view === "modes" && (
                 <>
-                  <Header title={matchType === "cs" ? "CS Matches" : "BR Matches"} onBack={() => setView("home")} coins={coins} onAdd={() => { setTab("home"); setView("deposit"); }} />
+                  <Header title={matchType === "cs" ? "CS Matches" : "BR Matches"} onBack={() => setView("home")} coins={coins} onAdd={() => { setTab("account"); setAcctView("deposit"); }} />
                   <ModeCard icon={User} title="Solo" sub="1 player per team" onClick={() => { setMode("solo"); setView("matches"); }} />
                   <ModeCard icon={Users} title="Duo" sub="2 players per team" onClick={() => { setMode("duo"); setView("matches"); }} />
                   <ModeCard icon={Users} title="Squad" sub="4 players per team" onClick={() => { setMode("squad"); setView("matches"); }} />
@@ -450,14 +570,38 @@ export default function App() {
 
               {tab === "home" && view === "matches" && (
                 <>
-                  <Header title={`${matchType === "cs" ? "CS" : "BR"} · ${mode[0].toUpperCase() + mode.slice(1)}`} onBack={() => setView("modes")} coins={coins} onAdd={() => { setTab("home"); setView("deposit"); }} />
+                  <Header title={`${matchType === "cs" ? "CS" : "BR"} · ${mode[0].toUpperCase() + mode.slice(1)}`} onBack={() => setView("modes")} coins={coins} onAdd={() => { setTab("account"); setAcctView("deposit"); }} />
                   {filteredMatches.map((m) => <MatchCard key={m.id} m={m} now={now} onOpen={setActiveMatch} joined={joinedIds.includes(m.id)} />)}
                 </>
               )}
 
+              {tab === "home" && view === "upcoming" && (
+                <>
+                  <Header title="Upcoming Matches" onBack={() => setView("home")} coins={coins} onAdd={() => { setTab("account"); setAcctView("deposit"); }} />
+                  {upcomingJoinedMatches.length === 0 && (
+                    <div className="text-sm text-center mt-8" style={{ color: C.dim }}>You haven't joined any matches yet.</div>
+                  )}
+                  {upcomingJoinedMatches.map((m) => (
+                    <div key={m.id} className="rounded-2xl p-3.5 mb-3" style={{ background: C.surface }}>
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="text-[15px] font-bold" style={{ color: C.text }}>{m.title}</div>
+                        <StatusPill st={statusOf(m, now)} />
+                      </div>
+                      <div className="text-xs mb-3" style={{ color: C.dim }}>
+                        {statusOf(m, now) === "live" ? "Match is live now" : `Starts in ${countdown(m.startsAt - now)}`}
+                      </div>
+                      <button onClick={() => setViewRoomMatch(m)} className="w-full rounded-xl py-2.5 font-bold text-xs flex items-center justify-center gap-2" style={{ background: C.violetDim, color: C.violet }}>
+                        <DoorOpen size={14} /> Room details
+                      </button>
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {/* ---------------- LEADERBOARD TAB ---------------- */}
               {tab === "leaderboard" && (
                 <>
-                  <Header title="Leaderboard" coins={coins} onAdd={() => { setTab("home"); setView("deposit"); }} />
+                  <Header title="Leaderboard" coins={coins} onAdd={() => { setTab("account"); setAcctView("deposit"); }} />
                   <div className="rounded-2xl overflow-hidden" style={{ background: C.surface }}>
                     {LEADERBOARD.map((p, i) => (
                       <div key={p.name} className="flex items-center gap-3 px-3.5 py-3" style={{ borderBottom: i < LEADERBOARD.length - 1 ? `1px solid ${C.border}` : "none" }}>
@@ -471,9 +615,10 @@ export default function App() {
                 </>
               )}
 
-              {tab === "account" && (
+              {/* ---------------- ACCOUNT TAB ---------------- */}
+              {tab === "account" && acctView === null && (
                 <>
-                  <Header title="Account" coins={coins} onAdd={() => { setTab("home"); setView("deposit"); }} />
+                  <Header title="Account" coins={coins} onAdd={() => setAcctView("deposit")} />
                   <div className="flex flex-col items-center text-center pt-3 pb-5">
                     <div className="w-16 h-16 rounded-full flex items-center justify-center mb-3" style={{ background: C.violetDim }}><User size={26} style={{ color: C.violet }} /></div>
                     <div className="font-bold" style={{ color: C.text }}>{session.gameName}</div>
@@ -493,6 +638,12 @@ export default function App() {
                       <div className="text-[10px] uppercase tracking-wide mt-0.5" style={{ color: C.dim }}>Earned</div>
                     </div>
                   </div>
+                  <div className="rounded-2xl overflow-hidden mb-3" style={{ background: C.surface }}>
+                    <AccountRow icon={Pencil} label="Edit Profile" onClick={() => { setEditName(session.gameName); setEditMsg(null); setAcctView("editProfile"); }} />
+                    <AccountRow icon={Wallet} label="Wallet" onClick={() => setAcctView("wallet")} />
+                    <AccountRow icon={ArrowDownToLine} label="Deposit" color={C.amber} onClick={() => setAcctView("deposit")} />
+                    <AccountRow icon={ArrowUpFromLine} label="Withdraw" color={C.teal} onClick={() => setAcctView("withdraw")} />
+                  </div>
                   <div className="rounded-2xl overflow-hidden" style={{ background: C.surface }}>
                     <button onClick={shareApp} className="w-full flex items-center gap-3 px-3.5 py-3.5" style={{ borderBottom: `1px solid ${C.border}` }}>
                       <Share2 size={16} style={{ color: C.dim }} />
@@ -507,24 +658,129 @@ export default function App() {
                 </>
               )}
 
+              {tab === "account" && acctView === "editProfile" && (
+                <>
+                  <Header title="Edit Profile" onBack={() => setAcctView(null)} coins={coins} onAdd={() => {}} />
+                  <div className="rounded-2xl p-4" style={{ background: C.surface }}>
+                    <div className="text-xs mb-1" style={{ color: C.dim }}>Full Name</div>
+                    <Field placeholder="In-game name" value={editName} onChange={(e) => setEditName(e.target.value)} />
+                    <div className="text-xs mb-1 mt-1" style={{ color: C.dim }}>New Password</div>
+                    <Field icon={Lock} placeholder="New password" type="password" value={editPass} onChange={(e) => setEditPass(e.target.value)} />
+                    <div className="text-xs mb-1" style={{ color: C.dim }}>Re-enter New Password</div>
+                    <Field icon={Lock} placeholder="Re-enter new password" type="password" value={editPassConfirm} onChange={(e) => setEditPassConfirm(e.target.value)} />
+                    {editMsg && <div className="text-xs font-semibold mb-2" style={{ color: C.red }}>{editMsg}</div>}
+                    <button onClick={submitProfileEdit} className="w-full rounded-xl py-3 font-bold text-sm" style={{ background: C.amber, color: "#1a1400" }}>Update Profile</button>
+                  </div>
+                </>
+              )}
+
+              {tab === "account" && acctView === "wallet" && (
+                <>
+                  <Header title="Wallet" onBack={() => setAcctView(null)} coins={coins} onAdd={() => {}} />
+                  <div className="rounded-2xl p-4 mb-4 text-center" style={{ background: C.surface }}>
+                    <div className="text-xs uppercase tracking-wide" style={{ color: C.dim }}>Current Balance</div>
+                    <div className="text-3xl font-black mt-1" style={{ color: C.amber }}>{coins} coins</div>
+                  </div>
+                  <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: C.dim }}>Deposit History</div>
+                  <div className="rounded-2xl overflow-hidden mb-4" style={{ background: C.surface }}>
+                    {depositHistory.length === 0 && <div className="p-3.5 text-xs" style={{ color: C.dim }}>No deposits yet.</div>}
+                    {depositHistory.map((d, i) => (
+                      <div key={i} className="flex items-center justify-between px-3.5 py-3" style={{ borderBottom: i < depositHistory.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                        <span className="text-xs" style={{ color: C.dim }}>{new Date(d.date).toLocaleDateString()}</span>
+                        <span className="text-sm font-bold" style={{ color: C.teal }}>+{d.amount} coins</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: C.dim }}>Withdrawal History</div>
+                  <div className="rounded-2xl overflow-hidden" style={{ background: C.surface }}>
+                    {withdrawHistory.length === 0 && <div className="p-3.5 text-xs" style={{ color: C.dim }}>No withdrawals yet.</div>}
+                    {withdrawHistory.map((w, i) => (
+                      <div key={i} className="flex items-center justify-between px-3.5 py-3" style={{ borderBottom: i < withdrawHistory.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                        <span className="text-xs" style={{ color: C.dim }}>{new Date(w.date).toLocaleDateString()} · {w.method}</span>
+                        <span className="text-sm font-bold" style={{ color: C.red }}>-{w.amount} ({w.status})</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {tab === "account" && acctView === "deposit" && (
+                <>
+                  <Header title="Deposit" onBack={() => setAcctView(null)} coins={coins} onAdd={() => {}} />
+                  <div className="rounded-2xl p-4 mt-1" style={{ background: C.surface }}>
+                    <div className="text-sm mb-3" style={{ color: C.dim }}>Send payment to get your payment ID on WhatsApp, then paste it below to receive your coins instantly. Minimum deposit is 100 coins.</div>
+                    <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Paste payment ID" className="w-full rounded-xl px-3.5 py-3 text-sm font-mono outline-none mb-3" style={{ background: C.surfaceAlt, color: C.text, border: `1px solid ${C.border}` }} />
+                    <button onClick={submitCode} className="w-full rounded-xl py-3 font-bold text-sm mb-3" style={{ background: C.violet, color: "#fff" }}>Redeem coins</button>
+                    <a href={WHATSAPP_LINK} target="_blank" rel="noreferrer" className="w-full rounded-xl py-3 font-bold text-sm flex items-center justify-center gap-2" style={{ background: "#1E4B3A", color: "#5FE0A8" }}>
+                      <MessageCircle size={16} /> Click here to contact admin for payment ID
+                    </a>
+                    {depositMsg && <div className="text-xs mt-3 font-semibold" style={{ color: C.red }}>{depositMsg.text}</div>}
+                  </div>
+                </>
+              )}
+
+              {tab === "account" && acctView === "withdraw" && (
+                <>
+                  <Header title="Withdraw" onBack={() => setAcctView(null)} coins={coins} onAdd={() => {}} />
+                  <div className="rounded-2xl p-4 mt-1 text-center mb-3" style={{ background: C.surface }}>
+                    <div className="text-xs uppercase tracking-wide" style={{ color: C.dim }}>Available balance</div>
+                    <div className="text-2xl font-black mt-1" style={{ color: C.amber }}>{coins} coins</div>
+                  </div>
+                  <div className="flex rounded-xl overflow-hidden mb-3" style={{ border: `1px solid ${C.border}` }}>
+                    <button onClick={() => setWithdrawMethod("easypaisa")} className="flex-1 py-3 text-sm font-bold" style={{ background: withdrawMethod === "easypaisa" ? C.teal : C.surface, color: withdrawMethod === "easypaisa" ? "#04241C" : C.dim }}>EasyPaisa</button>
+                    <button onClick={() => setWithdrawMethod("jazzcash")} className="flex-1 py-3 text-sm font-bold" style={{ background: withdrawMethod === "jazzcash" ? C.red : C.surface, color: withdrawMethod === "jazzcash" ? "#2A0507" : C.dim }}>JazzCash</button>
+                  </div>
+                  <div className="rounded-2xl p-4" style={{ background: C.surface }}>
+                    <div className="text-xs mb-1" style={{ color: C.dim }}>Account ID</div>
+                    <Field placeholder="Account number" value={wAccountId} onChange={(e) => setWAccountId(e.target.value)} inputMode="numeric" />
+                    <div className="text-xs mb-1" style={{ color: C.dim }}>Account Holder Name</div>
+                    <Field placeholder="Account holder name" value={wAccountHolder} onChange={(e) => setWAccountHolder(e.target.value)} />
+                    <div className="text-xs mb-1" style={{ color: C.dim }}>Withdrawal Coins</div>
+                    <Field placeholder="Withdrawal coins" value={wCoins} onChange={(e) => setWCoins(e.target.value)} inputMode="numeric" />
+                    {withdrawMsg && <div className="text-xs font-semibold mb-2" style={{ color: C.red }}>{withdrawMsg}</div>}
+                    <button onClick={submitWithdraw} className="w-full rounded-xl py-3 font-bold text-sm" style={{ background: C.teal, color: "#04241C" }}>Send Payment Request</button>
+                  </div>
+                </>
+              )}
+
+              {/* ---------------- MATCH DETAIL OVERLAY ---------------- */}
               {activeMatch && (
-                <div className="absolute inset-0 z-20 flex flex-col" style={{ background: C.bg }}>
+                <div className="absolute inset-0 z-20 flex flex-col overflow-y-auto" style={{ background: C.bg }}>
                   <div className="flex items-center justify-between px-0 pt-1 pb-2">
                     <span className="text-xs font-semibold tracking-wider uppercase" style={{ color: C.violet }}>{activeMatch.type === "cs" ? "Clash Squad" : "Battle Royale"} · {activeMatch.mode}</span>
                     <button onClick={() => setActiveMatch(null)} className="p-1.5 rounded-full" style={{ background: C.surface }}><X size={16} style={{ color: C.dim }} /></button>
                   </div>
                   <h2 className="text-2xl font-black leading-tight mb-2" style={{ color: C.text }}>{activeMatch.title}</h2>
                   <div className="mb-4"><StatusPill st={statusOf(activeMatch, now)} /></div>
-                  <div className="grid grid-cols-2 gap-2 mb-5">
+                  <div className="grid grid-cols-2 gap-2 mb-4">
                     <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Entry fee</div><div className="text-lg font-bold" style={{ color: C.amber }}>{activeMatch.entryFee} coins</div></div>
                     <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Prize pool</div><div className="text-lg font-bold" style={{ color: C.amber }}>{activeMatch.prize} coins</div></div>
                     <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Players</div><div className="text-sm font-semibold mt-0.5" style={{ color: C.text }}>{activeMatch.joined}/{activeMatch.max}</div></div>
                     <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Starts</div><div className="text-sm font-semibold mt-0.5" style={{ color: C.text }}>{statusOf(activeMatch, now) === "live" ? "Now" : countdown(activeMatch.startsAt - now)}</div></div>
                   </div>
+
+                  <button onClick={() => setViewPlayersMatch(activeMatch)} className="w-full rounded-xl py-2.5 mb-3 font-bold text-xs" style={{ background: C.surfaceAlt, color: C.text, border: `1px solid ${C.border}` }}>
+                    View players who joined
+                  </button>
+
+                  {joinedIds.includes(activeMatch.id) && statusOf(activeMatch, now) === "live" && (
+                    <div className="rounded-2xl p-4 mb-4" style={{ background: C.surface }}>
+                      <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: C.amber }}>Room Detail</div>
+                      <div className="flex items-center justify-between py-1.5">
+                        <span className="text-xs" style={{ color: C.dim }}>Room ID</span>
+                        <span className="text-sm font-bold" style={{ color: C.text }}>{roomDetails[activeMatch.id]?.roomId || "Not shared yet"}</span>
+                      </div>
+                      <div className="flex items-center justify-between py-1.5">
+                        <span className="text-xs" style={{ color: C.dim }}>Room Password</span>
+                        <span className="text-sm font-bold" style={{ color: C.text }}>{roomDetails[activeMatch.id]?.roomPassword || "Not shared yet"}</span>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="text-xs mb-3" style={{ color: C.dim }}>Entry fee is deducted immediately once you join and cannot be refunded.</div>
                   <div className="mt-auto pb-2">
                     <button
-                      onClick={() => joinMatch(activeMatch)}
+                      onClick={() => joinedIds.includes(activeMatch.id) ? null : openJoinForm(activeMatch)}
                       disabled={joinedIds.includes(activeMatch.id)}
                       className="w-full rounded-xl py-3.5 font-bold text-sm"
                       style={joinedIds.includes(activeMatch.id) ? { background: C.surfaceAlt, color: C.dim, border: `1px solid ${C.border}` } : { background: C.violet, color: "#fff" }}
@@ -535,6 +791,65 @@ export default function App() {
                 </div>
               )}
 
+              {/* ---------------- JOIN FORM MODAL ---------------- */}
+              {joinFormMatch && (
+                <div className="absolute inset-0 z-30 flex items-center justify-center" style={{ background: "rgba(5,4,8,0.85)" }}>
+                  <div className="rounded-2xl p-5 mx-4 w-full" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+                    <div className="text-lg font-black mb-1" style={{ color: C.text }}>Enter your details</div>
+                    <div className="text-xs mb-4" style={{ color: C.dim }}>Required to join {joinFormMatch.title}</div>
+                    <Field icon={Gamepad2} placeholder="In-game name" value={joinGameName} onChange={(e) => setJoinGameName(e.target.value)} />
+                    <Field icon={UserCircle2} placeholder="Game UID" value={joinUid} onChange={(e) => setJoinUid(e.target.value)} inputMode="numeric" />
+                    {joinError && <div className="text-xs font-semibold mb-2" style={{ color: C.red }}>{joinError}</div>}
+                    <div className="flex gap-2 mt-1">
+                      <button onClick={() => setJoinFormMatch(null)} className="flex-1 rounded-xl py-3 font-bold text-sm" style={{ background: C.surfaceAlt, color: C.text }}>Cancel</button>
+                      <button onClick={confirmJoin} className="flex-1 rounded-xl py-3 font-bold text-sm" style={{ background: C.violet, color: "#fff" }}>Confirm Join</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ---------------- PLAYERS LIST MODAL ---------------- */}
+              {viewPlayersMatch && (
+                <div className="absolute inset-0 z-30 flex items-end" style={{ background: "rgba(5,4,8,0.75)" }}>
+                  <div className="w-full rounded-t-3xl p-5" style={{ background: C.surface, border: `1px solid ${C.border}`, maxHeight: "70%", overflowY: "auto" }}>
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-lg font-black" style={{ color: C.text }}>Players joined</span>
+                      <button onClick={() => setViewPlayersMatch(null)} className="p-1.5 rounded-full" style={{ background: C.surfaceAlt }}><X size={15} style={{ color: C.dim }} /></button>
+                    </div>
+                    {(joinedPlayers[viewPlayersMatch.id] || []).length === 0 && (
+                      <div className="text-sm" style={{ color: C.dim }}>No one has joined with details yet.</div>
+                    )}
+                    {(joinedPlayers[viewPlayersMatch.id] || []).map((p, i) => (
+                      <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+                        <span className="text-sm font-semibold" style={{ color: C.text }}>{p.gameName}</span>
+                        <span className="text-xs" style={{ color: C.dim }}>UID: {p.uid}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ---------------- ROOM DETAILS MODAL (from Upcoming) ---------------- */}
+              {viewRoomMatch && (
+                <div className="absolute inset-0 z-30 flex items-center justify-center" style={{ background: "rgba(5,4,8,0.85)" }}>
+                  <div className="rounded-2xl p-5 mx-4 w-full" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-lg font-black" style={{ color: C.text }}>Room Details</span>
+                      <button onClick={() => setViewRoomMatch(null)} className="p-1.5 rounded-full" style={{ background: C.surfaceAlt }}><X size={15} style={{ color: C.dim }} /></button>
+                    </div>
+                    <div className="flex items-center justify-between py-2">
+                      <span className="text-xs" style={{ color: C.dim }}>Room ID</span>
+                      <span className="text-sm font-bold" style={{ color: C.text }}>{roomDetails[viewRoomMatch.id]?.roomId || "Not shared yet"}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2">
+                      <span className="text-xs" style={{ color: C.dim }}>Room Password</span>
+                      <span className="text-sm font-bold" style={{ color: C.text }}>{roomDetails[viewRoomMatch.id]?.roomPassword || "Not shared yet"}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ---------------- RULES SHEET ---------------- */}
               {showRules && (
                 <div className="absolute inset-0 z-30 flex items-end" style={{ background: "rgba(5,4,8,0.75)" }}>
                   <div className="w-full rounded-t-3xl p-5" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
@@ -543,13 +858,24 @@ export default function App() {
                       <button onClick={() => setShowRules(false)} className="p-1.5 rounded-full" style={{ background: C.surfaceAlt }}><X size={15} style={{ color: C.dim }} /></button>
                     </div>
                     <ul className="space-y-2.5 mb-4">
-                      {RULES.map((r, i) => <li key={i} className="text-sm flex gap-2" style={{ color: C.dim }}><span style={{ color: C.violet }}>•</span>{r}</li>)}
+                      {adminContent.rules.map((r, i) => <li key={i} className="text-sm flex gap-2" style={{ color: C.dim }}><span style={{ color: C.violet }}>•</span>{r}</li>)}
                     </ul>
                     <button onClick={() => setShowRules(false)} className="w-full rounded-xl py-3 font-bold text-sm" style={{ background: C.violet, color: "#fff" }}>Got it</button>
                   </div>
                 </div>
               )}
 
+              {/* ---------------- MIN DEPOSIT POPUP ---------------- */}
+              {showMinDepositPopup && (
+                <div className="absolute inset-0 z-30 flex items-center justify-center" style={{ background: "rgba(5,4,8,0.75)" }}>
+                  <div className="rounded-2xl p-6 flex flex-col items-center text-center mx-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+                    <div className="text-lg font-bold mt-1" style={{ color: C.text }}>Minimum deposit is of 100 coins</div>
+                    <button onClick={() => setShowMinDepositPopup(false)} className="mt-4 px-6 py-2 rounded-full text-sm font-bold" style={{ background: C.violet, color: "#fff" }}>Got it</button>
+                  </div>
+                </div>
+              )}
+
+              {/* ---------------- SUCCESS POPUP ---------------- */}
               {successPopup !== null && (
                 <div className="absolute inset-0 z-30 flex items-center justify-center" style={{ background: "rgba(5,4,8,0.75)" }}>
                   <div className="rounded-2xl p-6 flex flex-col items-center text-center mx-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
@@ -570,7 +896,7 @@ export default function App() {
 
             <div className="flex items-center justify-around py-3" style={{ borderTop: `1px solid ${C.border}`, background: C.bg }}>
               {[{ id: "home", label: "Home", icon: Home }, { id: "leaderboard", label: "Leaderboard", icon: Trophy }, { id: "account", label: "Account", icon: User }].map(({ id, label, icon: Icon }) => (
-                <button key={id} onClick={() => { setTab(id); if (id === "home") setView("home"); }} className="flex flex-col items-center gap-1">
+                <button key={id} onClick={() => { setTab(id); if (id === "home") setView("home"); if (id === "account") setAcctView(null); }} className="flex flex-col items-center gap-1">
                   <Icon size={18} style={{ color: tab === id ? C.violet : C.dim }} />
                   <span className="text-[10px] font-semibold" style={{ color: tab === id ? C.violet : C.dim }}>{label}</span>
                 </button>
@@ -581,4 +907,4 @@ export default function App() {
       </div>
     </div>
   );
-                     }
+}
