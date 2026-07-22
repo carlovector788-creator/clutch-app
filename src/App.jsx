@@ -6,6 +6,10 @@ import {
   MessageCircle, ArrowDownToLine, ArrowUpFromLine, Pencil,
   DoorOpen, CalendarClock,
 } from "lucide-react";
+import { db } from "./firebase";
+import {
+  doc, getDoc, setDoc, updateDoc, onSnapshot, collection, arrayUnion,
+} from "firebase/firestore";
 
 const C = {
   bg: "#0B0B14",
@@ -77,23 +81,26 @@ function countdown(ms) {
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m ${sec}s`;
 }
-function readJSON(key, fallback) {
+
+function readSession() {
   try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch (e) {
-    return fallback;
-  }
+    const raw = localStorage.getItem("clutch_session");
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
 }
-function writeJSON(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
+function writeSession(v) { localStorage.setItem("clutch_session", JSON.stringify(v)); }
+function clearSession() { localStorage.removeItem("clutch_session"); }
+
+async function fetchAccount(phone) {
+  const snap = await getDoc(doc(db, "accounts", phone));
+  return snap.exists() ? snap.data() : null;
 }
-function getAccounts() { return readJSON("clutch_accounts", {}); }
-function saveAccounts(a) { writeJSON("clutch_accounts", a); }
-function getMatchData() { return readJSON("clutch_matchdata", { joinedPlayers: {}, roomDetails: {} }); }
-function saveMatchData(d) { writeJSON("clutch_matchdata", d); }
-function getAdminContent() { return readJSON("clutch_admincontent", { ads: DEFAULT_ADS, rules: DEFAULT_RULES }); }
-function saveAdminContent(c) { writeJSON("clutch_admincontent", c); }
+async function createAccount(phone, data) {
+  await setDoc(doc(db, "accounts", phone), data);
+}
+async function patchAccount(phone, fields) {
+  await updateDoc(doc(db, "accounts", phone), fields);
+}
 
 function StatusPill({ st }) {
   const map = {
@@ -300,7 +307,7 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState(null);
 
-  const [view, setView] = useState("home"); // home | modes | matches | upcoming
+  const [view, setView] = useState("home");
   const [matchType, setMatchType] = useState("cs");
   const [mode, setMode] = useState("solo");
   const [coins, setCoins] = useState(0);
@@ -317,13 +324,15 @@ export default function App() {
   const [joinGameName, setJoinGameName] = useState("");
   const [joinUid, setJoinUid] = useState("");
   const [joinError, setJoinError] = useState(null);
+  const [joinBusy, setJoinBusy] = useState(false);
   const [viewPlayersMatch, setViewPlayersMatch] = useState(null);
   const [viewRoomMatch, setViewRoomMatch] = useState(null);
 
   const [tab, setTab] = useState("home");
-  const [acctView, setAcctView] = useState(null); // null | editProfile | wallet | deposit | withdraw
+  const [acctView, setAcctView] = useState(null);
   const [code, setCode] = useState("");
   const [depositMsg, setDepositMsg] = useState(null);
+  const [depositBusy, setDepositBusy] = useState(false);
   const [showMinDepositPopup, setShowMinDepositPopup] = useState(false);
   const [successPopup, setSuccessPopup] = useState(null);
   const [joinToast, setJoinToast] = useState(null);
@@ -334,32 +343,59 @@ export default function App() {
   const [editPass, setEditPass] = useState("");
   const [editPassConfirm, setEditPassConfirm] = useState("");
   const [editMsg, setEditMsg] = useState(null);
+  const [editBusy, setEditBusy] = useState(false);
 
   const [withdrawMethod, setWithdrawMethod] = useState("easypaisa");
   const [wAccountId, setWAccountId] = useState("");
   const [wAccountHolder, setWAccountHolder] = useState("");
   const [wCoins, setWCoins] = useState("");
   const [withdrawMsg, setWithdrawMsg] = useState(null);
+  const [withdrawBusy, setWithdrawBusy] = useState(false);
 
   useEffect(() => {
-    const existingSession = readJSON("clutch_session", null);
-    if (existingSession) {
-      setSession(existingSession);
-      const accounts = getAccounts();
-      const acc = accounts[existingSession.phone];
-      if (acc) {
-        setCoins(acc.coins ?? 0);
-        setDepositHistory(acc.depositHistory || []);
-        setWithdrawHistory(acc.withdrawHistory || []);
+    (async () => {
+      const existingSession = readSession();
+      if (existingSession) {
+        try {
+          const acc = await fetchAccount(existingSession.phone);
+          if (acc) {
+            setSession({ phone: acc.phone, gameName: acc.gameName, realName: acc.realName });
+            setCoins(acc.coins ?? 0);
+            setDepositHistory(acc.depositHistory || []);
+            setWithdrawHistory(acc.withdrawHistory || []);
+            setJoinedIds(acc.joinedMatchIds || []);
+          } else {
+            clearSession();
+          }
+        } catch (e) {
+          console.error("Failed to load account:", e);
+        }
       }
-    }
-    const md = getMatchData();
-    setJoinedPlayers(md.joinedPlayers || {});
-    setRoomDetails(md.roomDetails || {});
-    const ac = getAdminContent();
-    setAdminContent(ac);
-    const t = setTimeout(() => setBooted(true), 1600);
-    return () => clearTimeout(t);
+      setTimeout(() => setBooted(true), 1600);
+    })();
+  }, []);
+
+  useEffect(() => {
+    const unsubRooms = onSnapshot(collection(db, "roomDetails"), (snap) => {
+      const m = {};
+      snap.forEach((d) => { m[d.id] = d.data(); });
+      setRoomDetails(m);
+    }, (e) => console.error("roomDetails listener error:", e));
+
+    const unsubPlayers = onSnapshot(collection(db, "joinedPlayers"), (snap) => {
+      const m = {};
+      snap.forEach((d) => { m[d.id] = d.data().players || []; });
+      setJoinedPlayers(m);
+    }, (e) => console.error("joinedPlayers listener error:", e));
+
+    const unsubAdmin = onSnapshot(doc(db, "adminContent", "home"), (d) => {
+      if (d.exists()) {
+        const data = d.data();
+        setAdminContent({ ads: data.ads?.length ? data.ads : DEFAULT_ADS, rules: data.rules?.length ? data.rules : DEFAULT_RULES });
+      }
+    }, (e) => console.error("adminContent listener error:", e));
+
+    return () => { unsubRooms(); unsubPlayers(); unsubAdmin(); };
   }, []);
 
   useEffect(() => {
@@ -372,52 +408,54 @@ export default function App() {
   }, [adminContent.ads.length]);
 
   const filteredMatches = MATCHES.filter((m) => m.type === matchType && m.mode === mode);
-  const myJoinedIds = joinedIds;
-  const upcomingJoinedMatches = MATCHES.filter((m) => myJoinedIds.includes(m.id));
+  const upcomingJoinedMatches = MATCHES.filter((m) => joinedIds.includes(m.id));
 
-  function persistAccountFields(phone, fields) {
-    const accounts = getAccounts();
-    if (!accounts[phone]) return;
-    accounts[phone] = { ...accounts[phone], ...fields };
-    saveAccounts(accounts);
-  }
-
-  function handleSignUp({ phone, gameName, realName, password }) {
+  async function handleSignUp({ phone, gameName, realName, password }) {
     setAuthError(null);
     if (!phone || !gameName || !realName || !password) { setAuthError("Please fill in every field."); return; }
     if (password.length < 4) { setAuthError("Password should be at least 4 characters."); return; }
     setAuthBusy(true);
-    const accounts = getAccounts();
-    if (accounts[phone]) { setAuthError("An account with this phone number already exists — try logging in."); setAuthBusy(false); return; }
-    const profile = { phone, gameName, realName };
-    accounts[phone] = { ...profile, password, coins: 0, depositHistory: [], withdrawHistory: [] };
-    saveAccounts(accounts);
-    writeJSON("clutch_session", profile);
-    setSession(profile);
-    setCoins(0);
-    setDepositHistory([]);
-    setWithdrawHistory([]);
+    try {
+      const existing = await fetchAccount(phone);
+      if (existing) { setAuthError("An account with this phone number already exists — try logging in."); setAuthBusy(false); return; }
+      const profile = { phone, gameName, realName };
+      await createAccount(phone, { ...profile, password, coins: 0, depositHistory: [], withdrawHistory: [], joinedMatchIds: [] });
+      writeSession(profile);
+      setSession(profile);
+      setCoins(0);
+      setDepositHistory([]);
+      setWithdrawHistory([]);
+      setJoinedIds([]);
+    } catch (e) {
+      console.error("Sign up failed:", e);
+      setAuthError("Couldn't create your account — check your connection and try again.");
+    }
     setAuthBusy(false);
   }
 
-  function handleLogIn({ phone, password }) {
+  async function handleLogIn({ phone, password }) {
     setAuthError(null);
     if (!phone || !password) { setAuthError("Enter your phone number and password."); return; }
     setAuthBusy(true);
-    const accounts = getAccounts();
-    const acc = accounts[phone];
-    if (!acc || acc.password !== password) { setAuthError("Phone number or password is incorrect."); setAuthBusy(false); return; }
-    const profile = { phone: acc.phone, gameName: acc.gameName, realName: acc.realName };
-    writeJSON("clutch_session", profile);
-    setSession(profile);
-    setCoins(acc.coins ?? 0);
-    setDepositHistory(acc.depositHistory || []);
-    setWithdrawHistory(acc.withdrawHistory || []);
+    try {
+      const acc = await fetchAccount(phone);
+      if (!acc || acc.password !== password) { setAuthError("Phone number or password is incorrect."); setAuthBusy(false); return; }
+      const profile = { phone: acc.phone, gameName: acc.gameName, realName: acc.realName };
+      writeSession(profile);
+      setSession(profile);
+      setCoins(acc.coins ?? 0);
+      setDepositHistory(acc.depositHistory || []);
+      setWithdrawHistory(acc.withdrawHistory || []);
+      setJoinedIds(acc.joinedMatchIds || []);
+    } catch (e) {
+      console.error("Log in failed:", e);
+      setAuthError("Couldn't log you in — check your connection and try again.");
+    }
     setAuthBusy(false);
   }
 
   function handleLogout() {
-    localStorage.removeItem("clutch_session");
+    clearSession();
     setSession(null);
     setAuthMode("choice");
     setTab("home"); setView("home"); setActiveMatch(null); setAcctView(null);
@@ -431,37 +469,51 @@ export default function App() {
     }
   }
 
-  function submitCode() {
+  async function submitCode() {
     const clean = code.trim().toUpperCase();
     if (!clean) return;
     if (usedCodes.includes(clean)) { setDepositMsg({ text: "This payment ID has already been used." }); return; }
     const amount = VALID_CODES[clean];
     if (!amount) { setDepositMsg({ text: "Invalid payment ID. Double-check and try again." }); return; }
     if (amount < MIN_DEPOSIT) { setShowMinDepositPopup(true); return; }
-    const newCoins = coins + amount;
-    const entry = { amount, code: clean, date: new Date().toISOString() };
-    const newHistory = [entry, ...depositHistory];
-    setCoins(newCoins);
-    setDepositHistory(newHistory);
-    setUsedCodes((u) => [...u, clean]);
-    persistAccountFields(session.phone, { coins: newCoins, depositHistory: newHistory });
-    setCode(""); setDepositMsg(null); setSuccessPopup(amount);
+    setDepositBusy(true);
+    try {
+      const newCoins = coins + amount;
+      const entry = { amount, code: clean, date: new Date().toISOString() };
+      const newHistory = [entry, ...depositHistory];
+      await patchAccount(session.phone, { coins: newCoins, depositHistory: newHistory });
+      setCoins(newCoins);
+      setDepositHistory(newHistory);
+      setUsedCodes((u) => [...u, clean]);
+      setCode(""); setDepositMsg(null); setSuccessPopup(amount);
+    } catch (e) {
+      console.error("Deposit failed:", e);
+      setDepositMsg({ text: "Couldn't process the deposit — check your connection and try again." });
+    }
+    setDepositBusy(false);
   }
 
-  function submitWithdraw() {
+  async function submitWithdraw() {
     setWithdrawMsg(null);
     const amt = parseInt(wCoins, 10);
     if (!wAccountId.trim() || !wAccountHolder.trim() || !amt) { setWithdrawMsg("Please fill in every field."); return; }
     if (amt > coins) { setWithdrawMsg("You don't have enough coins for this withdrawal."); return; }
-    const newCoins = coins - amt;
-    const entry = { method: withdrawMethod, amount: amt, accountId: wAccountId.trim(), accountHolder: wAccountHolder.trim(), date: new Date().toISOString(), status: "Pending" };
-    const newHistory = [entry, ...withdrawHistory];
-    setCoins(newCoins);
-    setWithdrawHistory(newHistory);
-    persistAccountFields(session.phone, { coins: newCoins, withdrawHistory: newHistory });
-    setWAccountId(""); setWAccountHolder(""); setWCoins("");
-    setJoinToast("Withdrawal request sent — the admin will process it shortly.");
-    setAcctView(null);
+    setWithdrawBusy(true);
+    try {
+      const newCoins = coins - amt;
+      const entry = { method: withdrawMethod, amount: amt, accountId: wAccountId.trim(), accountHolder: wAccountHolder.trim(), date: new Date().toISOString(), status: "Pending" };
+      const newHistory = [entry, ...withdrawHistory];
+      await patchAccount(session.phone, { coins: newCoins, withdrawHistory: newHistory });
+      setCoins(newCoins);
+      setWithdrawHistory(newHistory);
+      setWAccountId(""); setWAccountHolder(""); setWCoins("");
+      setJoinToast("Withdrawal request sent — the admin will process it shortly.");
+      setAcctView(null);
+    } catch (e) {
+      console.error("Withdraw failed:", e);
+      setWithdrawMsg("Couldn't send the request — check your connection and try again.");
+    }
+    setWithdrawBusy(false);
   }
 
   function openJoinForm(m) {
@@ -471,42 +523,54 @@ export default function App() {
     setJoinError(null);
   }
 
-  function confirmJoin() {
+  async function confirmJoin() {
     const m = joinFormMatch;
     if (!joinGameName.trim() || !joinUid.trim()) { setJoinError("Both game name and UID are required to join."); return; }
     if (joinedIds.includes(m.id)) { setJoinFormMatch(null); return; }
     if (coins < m.entryFee) { setJoinError("Not enough coins — deposit to join this match."); return; }
-    const newCoins = coins - m.entryFee;
-    setCoins(newCoins);
-    persistAccountFields(session.phone, { coins: newCoins });
-    setJoinedIds((j) => [...j, m.id]);
-    const md = getMatchData();
-    const list = md.joinedPlayers[m.id] || [];
-    const updated = { ...md.joinedPlayers, [m.id]: [...list, { gameName: joinGameName.trim(), uid: joinUid.trim() }] };
-    const newMd = { ...md, joinedPlayers: updated };
-    saveMatchData(newMd);
-    setJoinedPlayers(updated);
-    setJoinFormMatch(null);
-    setActiveMatch(null);
-    setJoinToast(`Joined ${m.title}!`);
+    setJoinBusy(true);
+    try {
+      const newCoins = coins - m.entryFee;
+      const newJoinedIds = [...joinedIds, m.id];
+      await patchAccount(session.phone, { coins: newCoins, joinedMatchIds: newJoinedIds });
+      await setDoc(doc(db, "joinedPlayers", String(m.id)), {
+        players: arrayUnion({ gameName: joinGameName.trim(), uid: joinUid.trim() }),
+      }, { merge: true });
+      setCoins(newCoins);
+      setJoinedIds(newJoinedIds);
+      setJoinFormMatch(null);
+      setActiveMatch(null);
+      setJoinToast(`Joined ${m.title}!`);
+    } catch (e) {
+      console.error("Join failed:", e);
+      setJoinError("Couldn't join the match — check your connection and try again.");
+    }
+    setJoinBusy(false);
   }
 
-  function submitProfileEdit() {
+  async function submitProfileEdit() {
     setEditMsg(null);
     if (editPass || editPassConfirm) {
       if (editPass.length < 4) { setEditMsg("New password should be at least 4 characters."); return; }
       if (editPass !== editPassConfirm) { setEditMsg("Passwords do not match."); return; }
     }
-    const newGameName = editName.trim() || session.gameName;
-    const updatedSession = { ...session, gameName: newGameName };
-    writeJSON("clutch_session", updatedSession);
-    setSession(updatedSession);
-    const fields = { gameName: newGameName };
-    if (editPass) fields.password = editPass;
-    persistAccountFields(session.phone, fields);
-    setEditPass(""); setEditPassConfirm("");
-    setJoinToast("Profile updated.");
-    setAcctView(null);
+    setEditBusy(true);
+    try {
+      const newGameName = editName.trim() || session.gameName;
+      const fields = { gameName: newGameName };
+      if (editPass) fields.password = editPass;
+      await patchAccount(session.phone, fields);
+      const updatedSession = { ...session, gameName: newGameName };
+      writeSession(updatedSession);
+      setSession(updatedSession);
+      setEditPass(""); setEditPassConfirm("");
+      setJoinToast("Profile updated.");
+      setAcctView(null);
+    } catch (e) {
+      console.error("Profile update failed:", e);
+      setEditMsg("Couldn't save changes — check your connection and try again.");
+    }
+    setEditBusy(false);
   }
 
   useEffect(() => {
@@ -537,7 +601,6 @@ export default function App() {
 
             <div className="flex-1 overflow-y-auto px-4 pb-2 relative mt-1">
 
-              {/* ---------------- HOME TAB ---------------- */}
               {tab === "home" && view === "home" && (
                 <>
                   <Header title="Home" coins={coins} onAdd={() => { setTab("account"); setAcctView("deposit"); }} />
@@ -598,7 +661,6 @@ export default function App() {
                 </>
               )}
 
-              {/* ---------------- LEADERBOARD TAB ---------------- */}
               {tab === "leaderboard" && (
                 <>
                   <Header title="Leaderboard" coins={coins} onAdd={() => { setTab("account"); setAcctView("deposit"); }} />
@@ -615,7 +677,6 @@ export default function App() {
                 </>
               )}
 
-              {/* ---------------- ACCOUNT TAB ---------------- */}
               {tab === "account" && acctView === null && (
                 <>
                   <Header title="Account" coins={coins} onAdd={() => setAcctView("deposit")} />
@@ -669,7 +730,7 @@ export default function App() {
                     <div className="text-xs mb-1" style={{ color: C.dim }}>Re-enter New Password</div>
                     <Field icon={Lock} placeholder="Re-enter new password" type="password" value={editPassConfirm} onChange={(e) => setEditPassConfirm(e.target.value)} />
                     {editMsg && <div className="text-xs font-semibold mb-2" style={{ color: C.red }}>{editMsg}</div>}
-                    <button onClick={submitProfileEdit} className="w-full rounded-xl py-3 font-bold text-sm" style={{ background: C.amber, color: "#1a1400" }}>Update Profile</button>
+                    <button disabled={editBusy} onClick={submitProfileEdit} className="w-full rounded-xl py-3 font-bold text-sm" style={{ background: C.amber, color: "#1a1400", opacity: editBusy ? 0.6 : 1 }}>{editBusy ? "Saving…" : "Update Profile"}</button>
                   </div>
                 </>
               )}
@@ -710,7 +771,7 @@ export default function App() {
                   <div className="rounded-2xl p-4 mt-1" style={{ background: C.surface }}>
                     <div className="text-sm mb-3" style={{ color: C.dim }}>Send payment to get your payment ID on WhatsApp, then paste it below to receive your coins instantly. Minimum deposit is 100 coins.</div>
                     <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Paste payment ID" className="w-full rounded-xl px-3.5 py-3 text-sm font-mono outline-none mb-3" style={{ background: C.surfaceAlt, color: C.text, border: `1px solid ${C.border}` }} />
-                    <button onClick={submitCode} className="w-full rounded-xl py-3 font-bold text-sm mb-3" style={{ background: C.violet, color: "#fff" }}>Redeem coins</button>
+                    <button disabled={depositBusy} onClick={submitCode} className="w-full rounded-xl py-3 font-bold text-sm mb-3" style={{ background: C.violet, color: "#fff", opacity: depositBusy ? 0.6 : 1 }}>{depositBusy ? "Processing…" : "Redeem coins"}</button>
                     <a href={WHATSAPP_LINK} target="_blank" rel="noreferrer" className="w-full rounded-xl py-3 font-bold text-sm flex items-center justify-center gap-2" style={{ background: "#1E4B3A", color: "#5FE0A8" }}>
                       <MessageCircle size={16} /> Click here to contact admin for payment ID
                     </a>
@@ -738,12 +799,11 @@ export default function App() {
                     <div className="text-xs mb-1" style={{ color: C.dim }}>Withdrawal Coins</div>
                     <Field placeholder="Withdrawal coins" value={wCoins} onChange={(e) => setWCoins(e.target.value)} inputMode="numeric" />
                     {withdrawMsg && <div className="text-xs font-semibold mb-2" style={{ color: C.red }}>{withdrawMsg}</div>}
-                    <button onClick={submitWithdraw} className="w-full rounded-xl py-3 font-bold text-sm" style={{ background: C.teal, color: "#04241C" }}>Send Payment Request</button>
+                    <button disabled={withdrawBusy} onClick={submitWithdraw} className="w-full rounded-xl py-3 font-bold text-sm" style={{ background: C.teal, color: "#04241C", opacity: withdrawBusy ? 0.6 : 1 }}>{withdrawBusy ? "Sending…" : "Send Payment Request"}</button>
                   </div>
                 </>
               )}
 
-              {/* ---------------- MATCH DETAIL OVERLAY ---------------- */}
               {activeMatch && (
                 <div className="absolute inset-0 z-20 flex flex-col overflow-y-auto" style={{ background: C.bg }}>
                   <div className="flex items-center justify-between px-0 pt-1 pb-2">
@@ -791,7 +851,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* ---------------- JOIN FORM MODAL ---------------- */}
               {joinFormMatch && (
                 <div className="absolute inset-0 z-30 flex items-center justify-center" style={{ background: "rgba(5,4,8,0.85)" }}>
                   <div className="rounded-2xl p-5 mx-4 w-full" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
@@ -802,13 +861,12 @@ export default function App() {
                     {joinError && <div className="text-xs font-semibold mb-2" style={{ color: C.red }}>{joinError}</div>}
                     <div className="flex gap-2 mt-1">
                       <button onClick={() => setJoinFormMatch(null)} className="flex-1 rounded-xl py-3 font-bold text-sm" style={{ background: C.surfaceAlt, color: C.text }}>Cancel</button>
-                      <button onClick={confirmJoin} className="flex-1 rounded-xl py-3 font-bold text-sm" style={{ background: C.violet, color: "#fff" }}>Confirm Join</button>
+                      <button disabled={joinBusy} onClick={confirmJoin} className="flex-1 rounded-xl py-3 font-bold text-sm" style={{ background: C.violet, color: "#fff", opacity: joinBusy ? 0.6 : 1 }}>{joinBusy ? "Joining…" : "Confirm Join"}</button>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* ---------------- PLAYERS LIST MODAL ---------------- */}
               {viewPlayersMatch && (
                 <div className="absolute inset-0 z-30 flex items-end" style={{ background: "rgba(5,4,8,0.75)" }}>
                   <div className="w-full rounded-t-3xl p-5" style={{ background: C.surface, border: `1px solid ${C.border}`, maxHeight: "70%", overflowY: "auto" }}>
@@ -829,7 +887,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* ---------------- ROOM DETAILS MODAL (from Upcoming) ---------------- */}
               {viewRoomMatch && (
                 <div className="absolute inset-0 z-30 flex items-center justify-center" style={{ background: "rgba(5,4,8,0.85)" }}>
                   <div className="rounded-2xl p-5 mx-4 w-full" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
@@ -849,7 +906,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* ---------------- RULES SHEET ---------------- */}
               {showRules && (
                 <div className="absolute inset-0 z-30 flex items-end" style={{ background: "rgba(5,4,8,0.75)" }}>
                   <div className="w-full rounded-t-3xl p-5" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
@@ -865,7 +921,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* ---------------- MIN DEPOSIT POPUP ---------------- */}
               {showMinDepositPopup && (
                 <div className="absolute inset-0 z-30 flex items-center justify-center" style={{ background: "rgba(5,4,8,0.75)" }}>
                   <div className="rounded-2xl p-6 flex flex-col items-center text-center mx-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
@@ -875,7 +930,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* ---------------- SUCCESS POPUP ---------------- */}
               {successPopup !== null && (
                 <div className="absolute inset-0 z-30 flex items-center justify-center" style={{ background: "rgba(5,4,8,0.75)" }}>
                   <div className="rounded-2xl p-6 flex flex-col items-center text-center mx-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
@@ -907,4 +961,4 @@ export default function App() {
       </div>
     </div>
   );
-}
+  }
