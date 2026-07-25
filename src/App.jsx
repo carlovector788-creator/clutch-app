@@ -29,24 +29,6 @@ const C = {
 const WHATSAPP_LINK = "https://wa.me/923422178917";
 const MIN_DEPOSIT = 100;
 
-const now0 = Date.now();
-function mk(id, type, mode, title, entryFee, prize, joined, max, startOffsetMin) {
-  return { id, type, mode, title, entryFee, prize, joined, max, startsAt: now0 + startOffsetMin * 60000 };
-}
-const MATCHES = [
-  mk(1, "cs", "solo", "CS Solo Grind #21", 20, 150, 14, 16, 8),
-  mk(2, "cs", "solo", "CS Solo Late Night", 20, 150, 6, 16, 55),
-  mk(3, "cs", "duo", "CS Duo Clash #9", 30, 220, 10, 12, -3),
-  mk(4, "cs", "duo", "CS Duo Prime Time", 30, 220, 4, 12, 40),
-  mk(5, "cs", "squad", "CS Squad Showdown", 50, 400, 7, 8, 20),
-  mk(6, "cs", "squad", "CS Squad Weekly Final", 50, 400, 2, 8, 90),
-  mk(7, "br", "solo", "BR Solo Rush #33", 15, 120, 41, 48, 15),
-  mk(8, "br", "solo", "BR Solo Midnight", 15, 120, 22, 48, 70),
-  mk(9, "br", "duo", "BR Duo Rampage", 25, 200, 18, 24, -2),
-  mk(10, "br", "duo", "BR Duo Evening Cup", 25, 200, 9, 24, 33),
-  mk(11, "br", "squad", "BR Squad Booyah League", 40, 350, 15, 16, 5),
-  mk(12, "br", "squad", "BR Squad Grand Finale", 40, 350, 3, 16, 120),
-];
 const VALID_CODES = { "FF100XK92": 100, "FF250QW14": 250, "FF500ZP77": 500 };
 const LEADERBOARD = [
   { name: "Shadow_Blaze", kills: 214, earned: 3200 },
@@ -154,9 +136,9 @@ function ModeCard({ icon: Icon, title, sub, onClick }) {
     </button>
   );
 }
-function MatchCard({ m, now, onOpen, joined }) {
+function MatchCard({ m, now, onOpen, joined, joinedCount }) {
   const st = statusOf(m, now);
-  const pct = Math.round((m.joined / m.max) * 100);
+  const pct = Math.round(((joinedCount || 0) / m.slots) * 100);
   return (
     <button onClick={() => onOpen(m)} className="w-full text-left rounded-2xl p-3.5 mb-3 flex flex-col gap-2.5" style={{ background: C.surface }}>
       <div className="flex items-start justify-between">
@@ -170,7 +152,7 @@ function MatchCard({ m, now, onOpen, joined }) {
       <div className="flex items-center gap-3 text-xs" style={{ color: C.dim }}>
         <span className="flex items-center gap-1"><Coins size={12} style={{ color: C.amber }} /> {m.entryFee} entry</span>
         <span className="flex items-center gap-1"><Trophy size={12} style={{ color: C.amber }} /> {m.prize} prize</span>
-        <span className="flex items-center gap-1"><Users size={12} /> {m.joined}/{m.max}</span>
+        <span className="flex items-center gap-1"><Users size={12} /> {joinedCount || 0}/{m.slots}</span>
         {joined && <span className="ml-auto font-bold" style={{ color: C.violet }}>JOINED</span>}
       </div>
       <div className="h-1 rounded-full overflow-hidden" style={{ background: C.border }}>
@@ -318,11 +300,14 @@ export default function App() {
   const [joinedPlayers, setJoinedPlayers] = useState({});
   const [roomDetails, setRoomDetails] = useState({});
   const [adminContent, setAdminContent] = useState({ ads: DEFAULT_ADS, rules: DEFAULT_RULES });
+  const [matches, setMatches] = useState([]);
+  const [appStatus, setAppStatus] = useState({ on: true, reason: "" });
 
   const [activeMatch, setActiveMatch] = useState(null);
   const [joinFormMatch, setJoinFormMatch] = useState(null);
   const [joinGameName, setJoinGameName] = useState("");
   const [joinUid, setJoinUid] = useState("");
+  const [joinTeammates, setJoinTeammates] = useState([]);
   const [joinError, setJoinError] = useState(null);
   const [joinBusy, setJoinBusy] = useState(false);
   const [viewPlayersMatch, setViewPlayersMatch] = useState(null);
@@ -358,7 +343,7 @@ export default function App() {
       if (existingSession) {
         try {
           const acc = await fetchAccount(existingSession.phone);
-          if (acc) {
+          if (acc && !acc.banned) {
             setSession({ phone: acc.phone, gameName: acc.gameName, realName: acc.realName });
             setCoins(acc.coins ?? 0);
             setDepositHistory(acc.depositHistory || []);
@@ -384,7 +369,7 @@ export default function App() {
 
     const unsubPlayers = onSnapshot(collection(db, "joinedPlayers"), (snap) => {
       const m = {};
-      snap.forEach((d) => { m[d.id] = d.data().players || []; });
+      snap.forEach((d) => { m[d.id] = d.data().teams || []; });
       setJoinedPlayers(m);
     }, (e) => console.error("joinedPlayers listener error:", e));
 
@@ -395,7 +380,19 @@ export default function App() {
       }
     }, (e) => console.error("adminContent listener error:", e));
 
-    return () => { unsubRooms(); unsubPlayers(); unsubAdmin(); };
+    const unsubMatches = onSnapshot(collection(db, "matches"), (snap) => {
+      const list = [];
+      snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
+      list.sort((a, b) => a.startsAt - b.startsAt);
+      setMatches(list);
+    }, (e) => console.error("matches listener error:", e));
+
+    const unsubStatus = onSnapshot(doc(db, "settings", "appStatus"), (d) => {
+      if (d.exists()) setAppStatus({ on: d.data().on !== false, reason: d.data().reason || "" });
+      else setAppStatus({ on: true, reason: "" });
+    }, (e) => console.error("appStatus listener error:", e));
+
+    return () => { unsubRooms(); unsubPlayers(); unsubAdmin(); unsubMatches(); unsubStatus(); };
   }, []);
 
   useEffect(() => {
@@ -407,8 +404,8 @@ export default function App() {
     return () => clearInterval(id);
   }, [adminContent.ads.length]);
 
-  const filteredMatches = MATCHES.filter((m) => m.type === matchType && m.mode === mode);
-  const upcomingJoinedMatches = MATCHES.filter((m) => joinedIds.includes(m.id));
+  const filteredMatches = matches.filter((m) => m.type === matchType && m.mode === mode);
+  const upcomingJoinedMatches = matches.filter((m) => joinedIds.includes(m.id));
 
   async function handleSignUp({ phone, gameName, realName, password }) {
     setAuthError(null);
@@ -440,6 +437,7 @@ export default function App() {
     try {
       const acc = await fetchAccount(phone);
       if (!acc || acc.password !== password) { setAuthError("Phone number or password is incorrect."); setAuthBusy(false); return; }
+      if (acc.banned) { setAuthError("This account has been banned."); setAuthBusy(false); return; }
       const profile = { phone: acc.phone, gameName: acc.gameName, realName: acc.realName };
       writeSession(profile);
       setSession(profile);
@@ -520,21 +518,32 @@ export default function App() {
     setJoinFormMatch(m);
     setJoinGameName("");
     setJoinUid("");
+    const teammateCount = m.mode === "duo" ? 1 : m.mode === "squad" ? 3 : 0;
+    setJoinTeammates(Array.from({ length: teammateCount }, () => ({ gameName: "", uid: "" })));
     setJoinError(null);
+  }
+
+  function updateJoinTeammate(i, field, value) {
+    setJoinTeammates((ts) => ts.map((t, idx) => (idx === i ? { ...t, [field]: value } : t)));
   }
 
   async function confirmJoin() {
     const m = joinFormMatch;
-    if (!joinGameName.trim() || !joinUid.trim()) { setJoinError("Both game name and UID are required to join."); return; }
+    if (!joinGameName.trim() || !joinUid.trim()) { setJoinError("Your game name and UID are required to join."); return; }
+    if (joinTeammates.some((t) => !t.gameName.trim() || !t.uid.trim())) { setJoinError("Every teammate's game name and UID are required."); return; }
     if (joinedIds.includes(m.id)) { setJoinFormMatch(null); return; }
     if (coins < m.entryFee) { setJoinError("Not enough coins — deposit to join this match."); return; }
     setJoinBusy(true);
     try {
       const newCoins = coins - m.entryFee;
       const newJoinedIds = [...joinedIds, m.id];
+      const members = [
+        { gameName: joinGameName.trim(), uid: joinUid.trim() },
+        ...joinTeammates.map((t) => ({ gameName: t.gameName.trim(), uid: t.uid.trim() })),
+      ];
       await patchAccount(session.phone, { coins: newCoins, joinedMatchIds: newJoinedIds });
       await setDoc(doc(db, "joinedPlayers", String(m.id)), {
-        players: arrayUnion({ gameName: joinGameName.trim(), uid: joinUid.trim() }),
+        teams: arrayUnion({ members }),
       }, { merge: true });
       setCoins(newCoins);
       setJoinedIds(newJoinedIds);
@@ -587,11 +596,19 @@ export default function App() {
 
         {!booted && <Splash />}
 
-        {booted && !session && authMode === "choice" && <AuthChoice onPick={(m) => { setAuthError(null); setAuthMode(m); }} />}
-        {booted && !session && authMode === "signup" && <SignUp onBack={() => setAuthMode("choice")} onSubmit={handleSignUp} busy={authBusy} error={authError} />}
-        {booted && !session && authMode === "login" && <LogIn onBack={() => setAuthMode("choice")} onSubmit={handleLogIn} busy={authBusy} error={authError} />}
+        {booted && !appStatus.on && (
+          <div className="absolute inset-0 z-40 flex flex-col items-center justify-center p-6 text-center" style={{ background: C.bg }}>
+            <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style={{ background: "#3A1620" }}><Flame size={30} style={{ color: C.red }} /></div>
+            <div className="text-xl font-black mb-2" style={{ color: C.text }}>Clutch is temporarily unavailable</div>
+            {appStatus.reason && <div className="text-sm" style={{ color: C.dim }}>{appStatus.reason}</div>}
+          </div>
+        )}
 
-        {booted && session && (
+        {booted && appStatus.on && !session && authMode === "choice" && <AuthChoice onPick={(m) => { setAuthError(null); setAuthMode(m); }} />}
+        {booted && appStatus.on && !session && authMode === "signup" && <SignUp onBack={() => setAuthMode("choice")} onSubmit={handleSignUp} busy={authBusy} error={authError} />}
+        {booted && appStatus.on && !session && authMode === "login" && <LogIn onBack={() => setAuthMode("choice")} onSubmit={handleLogIn} busy={authBusy} error={authError} />}
+
+        {booted && appStatus.on && session && (
           <>
             <div className="flex items-center gap-1.5 px-4 pt-4">
               <Flame size={18} style={{ color: C.red }} />
@@ -634,7 +651,8 @@ export default function App() {
               {tab === "home" && view === "matches" && (
                 <>
                   <Header title={`${matchType === "cs" ? "CS" : "BR"} · ${mode[0].toUpperCase() + mode.slice(1)}`} onBack={() => setView("modes")} coins={coins} onAdd={() => { setTab("account"); setAcctView("deposit"); }} />
-                  {filteredMatches.map((m) => <MatchCard key={m.id} m={m} now={now} onOpen={setActiveMatch} joined={joinedIds.includes(m.id)} />)}
+                  {filteredMatches.length === 0 && <div className="text-sm text-center mt-8" style={{ color: C.dim }}>No matches yet — check back soon.</div>}
+                  {filteredMatches.map((m) => <MatchCard key={m.id} m={m} now={now} onOpen={setActiveMatch} joined={joinedIds.includes(m.id)} joinedCount={(joinedPlayers[m.id] || []).length} />)}
                 </>
               )}
 
@@ -813,11 +831,18 @@ export default function App() {
                   <h2 className="text-2xl font-black leading-tight mb-2" style={{ color: C.text }}>{activeMatch.title}</h2>
                   <div className="mb-4"><StatusPill st={statusOf(activeMatch, now)} /></div>
                   <div className="grid grid-cols-2 gap-2 mb-4">
+                    <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Map</div><div className="text-sm font-semibold mt-0.5" style={{ color: C.text }}>{activeMatch.map}</div></div>
                     <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Entry fee</div><div className="text-lg font-bold" style={{ color: C.amber }}>{activeMatch.entryFee} coins</div></div>
                     <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Prize pool</div><div className="text-lg font-bold" style={{ color: C.amber }}>{activeMatch.prize} coins</div></div>
-                    <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Players</div><div className="text-sm font-semibold mt-0.5" style={{ color: C.text }}>{activeMatch.joined}/{activeMatch.max}</div></div>
+                    <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Players</div><div className="text-sm font-semibold mt-0.5" style={{ color: C.text }}>{(joinedPlayers[activeMatch.id] || []).length}/{activeMatch.slots}</div></div>
                     <div className="rounded-xl p-3" style={{ background: C.surface }}><div className="text-[10px] uppercase tracking-wide" style={{ color: C.dim }}>Starts</div><div className="text-sm font-semibold mt-0.5" style={{ color: C.text }}>{statusOf(activeMatch, now) === "live" ? "Now" : countdown(activeMatch.startsAt - now)}</div></div>
                   </div>
+                  {activeMatch.rules && (
+                    <div className="rounded-xl p-3 mb-4" style={{ background: C.surface }}>
+                      <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.dim }}>Rules</div>
+                      <div className="text-xs" style={{ color: C.text }}>{activeMatch.rules}</div>
+                    </div>
+                  )}
 
                   <button onClick={() => setViewPlayersMatch(activeMatch)} className="w-full rounded-xl py-2.5 mb-3 font-bold text-xs" style={{ background: C.surfaceAlt, color: C.text, border: `1px solid ${C.border}` }}>
                     View players who joined
@@ -853,11 +878,21 @@ export default function App() {
 
               {joinFormMatch && (
                 <div className="absolute inset-0 z-30 flex items-center justify-center" style={{ background: "rgba(5,4,8,0.85)" }}>
-                  <div className="rounded-2xl p-5 mx-4 w-full" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+                  <div className="rounded-2xl p-5 mx-4 w-full max-h-[85%] overflow-y-auto" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
                     <div className="text-lg font-black mb-1" style={{ color: C.text }}>Enter your details</div>
                     <div className="text-xs mb-4" style={{ color: C.dim }}>Required to join {joinFormMatch.title}</div>
+                    <div className="text-xs font-bold mb-1" style={{ color: C.dim }}>Your info</div>
                     <Field icon={Gamepad2} placeholder="In-game name" value={joinGameName} onChange={(e) => setJoinGameName(e.target.value)} />
                     <Field icon={UserCircle2} placeholder="Game UID" value={joinUid} onChange={(e) => setJoinUid(e.target.value)} inputMode="numeric" />
+                    {joinTeammates.map((t, i) => (
+                      <div key={i}>
+                        <div className="text-xs font-bold mb-1 mt-2" style={{ color: C.dim }}>
+                          {joinFormMatch.mode === "duo" ? "Teammate" : `Teammate ${i + 2}`}
+                        </div>
+                        <Field icon={Gamepad2} placeholder="Teammate in-game name" value={t.gameName} onChange={(e) => updateJoinTeammate(i, "gameName", e.target.value)} />
+                        <Field icon={UserCircle2} placeholder="Teammate UID" value={t.uid} onChange={(e) => updateJoinTeammate(i, "uid", e.target.value)} inputMode="numeric" />
+                      </div>
+                    ))}
                     {joinError && <div className="text-xs font-semibold mb-2" style={{ color: C.red }}>{joinError}</div>}
                     <div className="flex gap-2 mt-1">
                       <button onClick={() => setJoinFormMatch(null)} className="flex-1 rounded-xl py-3 font-bold text-sm" style={{ background: C.surfaceAlt, color: C.text }}>Cancel</button>
@@ -877,10 +912,15 @@ export default function App() {
                     {(joinedPlayers[viewPlayersMatch.id] || []).length === 0 && (
                       <div className="text-sm" style={{ color: C.dim }}>No one has joined with details yet.</div>
                     )}
-                    {(joinedPlayers[viewPlayersMatch.id] || []).map((p, i) => (
-                      <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
-                        <span className="text-sm font-semibold" style={{ color: C.text }}>{p.gameName}</span>
-                        <span className="text-xs" style={{ color: C.dim }}>UID: {p.uid}</span>
+                    {(joinedPlayers[viewPlayersMatch.id] || []).map((team, i) => (
+                      <div key={i} className="py-2.5" style={{ borderBottom: `1px solid ${C.border}` }}>
+                        {viewPlayersMatch.mode !== "solo" && <div className="text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: C.violet }}>Team {i + 1}</div>}
+                        {(team.members || []).map((p, j) => (
+                          <div key={j} className="flex items-center justify-between py-0.5">
+                            <span className="text-sm font-semibold" style={{ color: C.text }}>{p.gameName}</span>
+                            <span className="text-xs" style={{ color: C.dim }}>UID: {p.uid}</span>
+                          </div>
+                        ))}
                       </div>
                     ))}
                   </div>
