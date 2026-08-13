@@ -1,10 +1,10 @@
- import { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import {
   Trophy, Users, Home, User, ChevronRight, ChevronLeft, X, Flame,
   Wallet, Plus, Swords, Crosshair, Skull, CheckCircle2, Coins,
   Megaphone, Share2, LogOut, Lock, Phone, Gamepad2, UserCircle2,
   MessageCircle, ArrowDownToLine, ArrowUpFromLine, Pencil,
-  DoorOpen, CalendarClock,
+  DoorOpen, CalendarClock, ClipboardList,
 } from "lucide-react";
 import { db } from "./firebase";
 import {
@@ -28,13 +28,6 @@ const C = {
 
 const WHATSAPP_LINK = "https://wa.me/923422178917";
 
-const LEADERBOARD = [
-  { name: "Shadow_Blaze", kills: 0, earned: 0 },
-  { name: "RiverX", kills: 0, earned: 0 },
-  { name: "NoScope_Dev", kills:0, earned: 0 },
-  { name: "Falcon.gg", kills: 0, earned: 0 },
-  { name: "You", kills: 0, earned: 0 },
-];
 const DEFAULT_ADS = [
   "🔥 Weekend Squad Cup — 500 coin prize pool",
   "Invite your squad — bonus coins for every friend who joins",
@@ -299,6 +292,13 @@ export default function App() {
   const [adminContent, setAdminContent] = useState({ ads: DEFAULT_ADS, rules: DEFAULT_RULES });
   const [matches, setMatches] = useState([]);
   const [appStatus, setAppStatus] = useState({ on: true, reason: "" });
+  const [leaderboardData, setLeaderboardData] = useState([]);
+
+  // NEW: real player stats
+  const [kills, setKills] = useState(0);
+  const [matchesPlayedCount, setMatchesPlayedCount] = useState(0);
+  const [totalEarned, setTotalEarned] = useState(0);
+  const [matchResults, setMatchResults] = useState([]);
 
   const [activeMatch, setActiveMatch] = useState(null);
   const [joinFormMatch, setJoinFormMatch] = useState(null);
@@ -345,6 +345,10 @@ export default function App() {
             setDepositHistory(acc.depositHistory || []);
             setWithdrawHistory(acc.withdrawHistory || []);
             setJoinedIds(acc.joinedMatchIds || []);
+            setKills(acc.kills ?? 0);
+            setMatchesPlayedCount(acc.matchesPlayed ?? 0);
+            setTotalEarned(acc.totalEarned ?? 0);
+            setMatchResults(acc.matchResults || []);
           } else {
             clearSession();
           }
@@ -388,7 +392,15 @@ export default function App() {
       else setAppStatus({ on: true, reason: "" });
     }, (e) => console.error("appStatus listener error:", e));
 
-    return () => { unsubRooms(); unsubPlayers(); unsubAdmin(); unsubMatches(); unsubStatus(); };
+    // NEW: live leaderboard from real accounts, sorted by total coins earned
+    const unsubLeaderboard = onSnapshot(collection(db, "accounts"), (snap) => {
+      const list = [];
+      snap.forEach((d) => list.push({ phone: d.id, ...d.data() }));
+      list.sort((a, b) => (b.totalEarned || 0) - (a.totalEarned || 0));
+      setLeaderboardData(list.slice(0, 30));
+    }, (e) => console.error("leaderboard listener error:", e));
+
+    return () => { unsubRooms(); unsubPlayers(); unsubAdmin(); unsubMatches(); unsubStatus(); unsubLeaderboard(); };
   }, []);
 
   useEffect(() => {
@@ -412,13 +424,21 @@ export default function App() {
       const existing = await fetchAccount(phone);
       if (existing) { setAuthError("An account with this phone number already exists — try logging in."); setAuthBusy(false); return; }
       const profile = { phone, gameName, realName };
-      await createAccount(phone, { ...profile, password, coins: 0, depositHistory: [], withdrawHistory: [], joinedMatchIds: [] });
+      await createAccount(phone, {
+        ...profile, password, coins: 0,
+        kills: 0, matchesPlayed: 0, totalEarned: 0, matchResults: [],
+        depositHistory: [], withdrawHistory: [], joinedMatchIds: [],
+      });
       writeSession(profile);
       setSession(profile);
       setCoins(0);
       setDepositHistory([]);
       setWithdrawHistory([]);
       setJoinedIds([]);
+      setKills(0);
+      setMatchesPlayedCount(0);
+      setTotalEarned(0);
+      setMatchResults([]);
     } catch (e) {
       console.error("Sign up failed:", e);
       setAuthError("Couldn't create your account — check your connection and try again.");
@@ -441,6 +461,10 @@ export default function App() {
       setDepositHistory(acc.depositHistory || []);
       setWithdrawHistory(acc.withdrawHistory || []);
       setJoinedIds(acc.joinedMatchIds || []);
+      setKills(acc.kills ?? 0);
+      setMatchesPlayedCount(acc.matchesPlayed ?? 0);
+      setTotalEarned(acc.totalEarned ?? 0);
+      setMatchResults(acc.matchResults || []);
     } catch (e) {
       console.error("Log in failed:", e);
       setAuthError("Couldn't log you in — check your connection and try again.");
@@ -538,8 +562,9 @@ export default function App() {
     try {
       const newCoins = coins - m.entryFee;
       const newJoinedIds = [...joinedIds, m.id];
+      // NEW: first member (you) carries your phone so the owner can link match results to your account
       const members = [
-        { gameName: joinGameName.trim(), uid: joinUid.trim() },
+        { gameName: joinGameName.trim(), uid: joinUid.trim(), phone: session.phone },
         ...joinTeammates.map((t) => ({ gameName: t.gameName.trim(), uid: t.uid.trim() })),
       ];
       await patchAccount(session.phone, { coins: newCoins, joinedMatchIds: newJoinedIds });
@@ -588,8 +613,6 @@ export default function App() {
     const t = setTimeout(() => setJoinToast(null), 2400);
     return () => clearTimeout(t);
   }, [joinToast]);
-
-  const matchesPlayed = joinedIds.length + 6, totalKills = 42, totalEarned = 480;
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "#050408" }}>
@@ -684,12 +707,13 @@ export default function App() {
                 <>
                   <Header title="Leaderboard" coins={coins} onAdd={() => { setTab("account"); setAcctView("deposit"); }} />
                   <div className="rounded-2xl overflow-hidden" style={{ background: C.surface }}>
-                    {LEADERBOARD.map((p, i) => (
-                      <div key={p.name} className="flex items-center gap-3 px-3.5 py-3" style={{ borderBottom: i < LEADERBOARD.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                    {leaderboardData.length === 0 && <div className="p-3.5 text-xs" style={{ color: C.dim }}>No players yet.</div>}
+                    {leaderboardData.map((p, i) => (
+                      <div key={p.phone} className="flex items-center gap-3 px-3.5 py-3" style={{ borderBottom: i < leaderboardData.length - 1 ? `1px solid ${C.border}` : "none" }}>
                         <span className="w-6 text-sm font-bold text-center" style={{ color: i < 3 ? C.amber : C.dim }}>{i + 1}</span>
-                        <span className="flex-1 text-sm font-semibold" style={{ color: p.name === "You" ? C.violet : C.text }}>{p.name}</span>
-                        <span className="flex items-center gap-1 text-xs" style={{ color: C.dim }}><Skull size={12} /> {p.kills}</span>
-                        <span className="flex items-center gap-1 text-xs font-semibold" style={{ color: C.amber }}><Coins size={12} /> {p.earned}</span>
+                        <span className="flex-1 text-sm font-semibold" style={{ color: session && p.phone === session.phone ? C.violet : C.text }}>{p.gameName}{session && p.phone === session.phone ? " (You)" : ""}</span>
+                        <span className="flex items-center gap-1 text-xs" style={{ color: C.dim }}><Skull size={12} /> {p.kills || 0}</span>
+                        <span className="flex items-center gap-1 text-xs font-semibold" style={{ color: C.amber }}><Coins size={12} /> {p.totalEarned || 0}</span>
                       </div>
                     ))}
                   </div>
@@ -706,11 +730,11 @@ export default function App() {
                   </div>
                   <div className="grid grid-cols-3 gap-2 mb-4">
                     <div className="rounded-xl p-3 text-center" style={{ background: C.surface }}>
-                      <div className="text-lg font-bold" style={{ color: C.text }}>{matchesPlayed}</div>
+                      <div className="text-lg font-bold" style={{ color: C.text }}>{matchesPlayedCount}</div>
                       <div className="text-[10px] uppercase tracking-wide mt-0.5" style={{ color: C.dim }}>Matches</div>
                     </div>
                     <div className="rounded-xl p-3 text-center" style={{ background: C.surface }}>
-                      <div className="text-lg font-bold" style={{ color: C.text }}>{totalKills}</div>
+                      <div className="text-lg font-bold" style={{ color: C.text }}>{kills}</div>
                       <div className="text-[10px] uppercase tracking-wide mt-0.5" style={{ color: C.dim }}>Kills</div>
                     </div>
                     <div className="rounded-xl p-3 text-center" style={{ background: C.surface }}>
@@ -723,6 +747,7 @@ export default function App() {
                     <AccountRow icon={Wallet} label="Wallet" onClick={() => setAcctView("wallet")} />
                     <AccountRow icon={ArrowDownToLine} label="Deposit" color={C.amber} onClick={() => setAcctView("deposit")} />
                     <AccountRow icon={ArrowUpFromLine} label="Withdraw" color={C.teal} onClick={() => setAcctView("withdraw")} />
+                    <AccountRow icon={ClipboardList} label="Match Results" color={C.violet} onClick={() => setAcctView("results")} />
                   </div>
                   <div className="rounded-2xl overflow-hidden" style={{ background: C.surface }}>
                     <button onClick={shareApp} className="w-full flex items-center gap-3 px-3.5 py-3.5" style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -819,6 +844,25 @@ export default function App() {
                     <Field placeholder="Withdrawal coins" value={wCoins} onChange={(e) => setWCoins(e.target.value)} inputMode="numeric" />
                     {withdrawMsg && <div className="text-xs font-semibold mb-2" style={{ color: C.red }}>{withdrawMsg}</div>}
                     <button disabled={withdrawBusy} onClick={submitWithdraw} className="w-full rounded-xl py-3 font-bold text-sm" style={{ background: C.teal, color: "#04241C", opacity: withdrawBusy ? 0.6 : 1 }}>{withdrawBusy ? "Sending…" : "Send Payment Request"}</button>
+                  </div>
+                </>
+              )}
+
+              {tab === "account" && acctView === "results" && (
+                <>
+                  <Header title="Match Results" onBack={() => setAcctView(null)} coins={coins} onAdd={() => {}} />
+                  <div className="rounded-2xl overflow-hidden" style={{ background: C.surface }}>
+                    {matchResults.length === 0 && <div className="p-3.5 text-xs" style={{ color: C.dim }}>No results yet — results appear here after the admin enters them for a finished match.</div>}
+                    {matchResults.map((r, i) => (
+                      <div key={i} className="px-3.5 py-3" style={{ borderBottom: i < matchResults.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                        <div className="text-sm font-bold mb-1" style={{ color: C.text }}>{r.matchTitle}</div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs flex items-center gap-1" style={{ color: C.dim }}><Skull size={12} /> {r.kills} kills</span>
+                          <span className="text-xs font-semibold flex items-center gap-1" style={{ color: C.amber }}><Coins size={12} /> +{r.coinsWon} coins</span>
+                        </div>
+                        <div className="text-[10px] mt-1" style={{ color: C.dim }}>{new Date(r.date).toLocaleDateString()}</div>
+                      </div>
+                    ))}
                   </div>
                 </>
               )}
