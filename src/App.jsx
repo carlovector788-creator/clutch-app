@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+ import { useState, useEffect } from "react";
 import {
   Trophy, Users, Home, User, ChevronRight, ChevronLeft, X, Flame,
   Wallet, Plus, Swords, Crosshair, Skull, CheckCircle2, Coins,
@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { db } from "./firebase";
 import {
-  doc, getDoc, setDoc, updateDoc, onSnapshot, collection, arrayUnion,
+  doc, getDoc, setDoc, updateDoc, onSnapshot, collection, arrayUnion, deleteDoc,
 } from "firebase/firestore";
 
 const C = {
@@ -27,15 +27,13 @@ const C = {
 };
 
 const WHATSAPP_LINK = "https://wa.me/923422178917";
-const MIN_DEPOSIT = 100;
 
-const VALID_CODES = { "FF100XK92": 100, "FF250QW14": 250, "FF500ZP77": 500 };
 const LEADERBOARD = [
-  { name: "Shadow_Blaze", kills: 214, earned: 3200 },
-  { name: "RiverX", kills: 188, earned: 2750 },
-  { name: "NoScope_Dev", kills: 176, earned: 2600 },
-  { name: "Falcon.gg", kills: 150, earned: 2100 },
-  { name: "You", kills: 42, earned: 480 },
+  { name: "Shadow_Blaze", kills: 0, earned: 0 },
+  { name: "RiverX", kills: 0, earned: 0 },
+  { name: "NoScope_Dev", kills:0, earned: 0 },
+  { name: "Falcon.gg", kills: 0, earned: 0 },
+  { name: "You", kills: 0, earned: 0 },
 ];
 const DEFAULT_ADS = [
   "🔥 Weekend Squad Cup — 500 coin prize pool",
@@ -295,7 +293,6 @@ export default function App() {
   const [coins, setCoins] = useState(0);
   const [depositHistory, setDepositHistory] = useState([]);
   const [withdrawHistory, setWithdrawHistory] = useState([]);
-  const [usedCodes, setUsedCodes] = useState([]);
   const [joinedIds, setJoinedIds] = useState([]);
   const [joinedPlayers, setJoinedPlayers] = useState({});
   const [roomDetails, setRoomDetails] = useState({});
@@ -318,7 +315,6 @@ export default function App() {
   const [code, setCode] = useState("");
   const [depositMsg, setDepositMsg] = useState(null);
   const [depositBusy, setDepositBusy] = useState(false);
-  const [showMinDepositPopup, setShowMinDepositPopup] = useState(false);
   const [successPopup, setSuccessPopup] = useState(null);
   const [joinToast, setJoinToast] = useState(null);
   const [showRules, setShowRules] = useState(false);
@@ -470,20 +466,25 @@ export default function App() {
   async function submitCode() {
     const clean = code.trim().toUpperCase();
     if (!clean) return;
-    if (usedCodes.includes(clean)) { setDepositMsg({ text: "This payment ID has already been used." }); return; }
-    const amount = VALID_CODES[clean];
-    if (!amount) { setDepositMsg({ text: "Invalid payment ID. Double-check and try again." }); return; }
-    if (amount < MIN_DEPOSIT) { setShowMinDepositPopup(true); return; }
     setDepositBusy(true);
+    setDepositMsg(null);
     try {
+      const codeSnap = await getDoc(doc(db, "paymentCodes", clean));
+      if (!codeSnap.exists()) {
+        setDepositMsg({ text: "Invalid payment ID. Double-check and try again." });
+        setDepositBusy(false);
+        return;
+      }
+      const amount = codeSnap.data().coins;
       const newCoins = coins + amount;
       const entry = { amount, code: clean, date: new Date().toISOString() };
       const newHistory = [entry, ...depositHistory];
       await patchAccount(session.phone, { coins: newCoins, depositHistory: newHistory });
+      await deleteDoc(doc(db, "paymentCodes", clean));
       setCoins(newCoins);
       setDepositHistory(newHistory);
-      setUsedCodes((u) => [...u, clean]);
-      setCode(""); setDepositMsg(null); setSuccessPopup(amount);
+      setCode("");
+      setSuccessPopup(amount);
     } catch (e) {
       console.error("Deposit failed:", e);
       setDepositMsg({ text: "Couldn't process the deposit — check your connection and try again." });
@@ -787,7 +788,7 @@ export default function App() {
                 <>
                   <Header title="Deposit" onBack={() => setAcctView(null)} coins={coins} onAdd={() => {}} />
                   <div className="rounded-2xl p-4 mt-1" style={{ background: C.surface }}>
-                    <div className="text-sm mb-3" style={{ color: C.dim }}>Send payment to get your payment ID on WhatsApp, then paste it below to receive your coins instantly. Minimum deposit is 100 coins.</div>
+                    <div className="text-sm mb-3" style={{ color: C.dim }}>Send payment to get your payment ID on WhatsApp, then paste it below to receive your coins instantly.</div>
                     <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Paste payment ID" className="w-full rounded-xl px-3.5 py-3 text-sm font-mono outline-none mb-3" style={{ background: C.surfaceAlt, color: C.text, border: `1px solid ${C.border}` }} />
                     <button disabled={depositBusy} onClick={submitCode} className="w-full rounded-xl py-3 font-bold text-sm mb-3" style={{ background: C.violet, color: "#fff", opacity: depositBusy ? 0.6 : 1 }}>{depositBusy ? "Processing…" : "Redeem coins"}</button>
                     <a href={WHATSAPP_LINK} target="_blank" rel="noreferrer" className="w-full rounded-xl py-3 font-bold text-sm flex items-center justify-center gap-2" style={{ background: "#1E4B3A", color: "#5FE0A8" }}>
@@ -961,15 +962,6 @@ export default function App() {
                 </div>
               )}
 
-              {showMinDepositPopup && (
-                <div className="absolute inset-0 z-30 flex items-center justify-center" style={{ background: "rgba(5,4,8,0.75)" }}>
-                  <div className="rounded-2xl p-6 flex flex-col items-center text-center mx-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-                    <div className="text-lg font-bold mt-1" style={{ color: C.text }}>Minimum deposit is of 100 coins</div>
-                    <button onClick={() => setShowMinDepositPopup(false)} className="mt-4 px-6 py-2 rounded-full text-sm font-bold" style={{ background: C.violet, color: "#fff" }}>Got it</button>
-                  </div>
-                </div>
-              )}
-
               {successPopup !== null && (
                 <div className="absolute inset-0 z-30 flex items-center justify-center" style={{ background: "rgba(5,4,8,0.75)" }}>
                   <div className="rounded-2xl p-6 flex flex-col items-center text-center mx-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
@@ -1001,4 +993,4 @@ export default function App() {
       </div>
     </div>
   );
-          }
+}       
